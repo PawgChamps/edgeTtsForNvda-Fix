@@ -1,0 +1,21 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+
+# Compiler/build outputs
+build/
+dist/
+*.spec
+build_cython/
+build_nuitka/
+build_addon/
+
+# Excluded folders / experimental tests
+edgeTtsOffline/
+tamil_offline_test/
+clean_project.py
+compile_addon.py
+# Generated NVDA Add-on packages
+*.nvda-addon
