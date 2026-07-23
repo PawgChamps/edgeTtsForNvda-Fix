@@ -17,5 +17,8 @@ edgeTtsOffline/
 tamil_offline_test/
 clean_project.py
 compile_addon.py
+compile_cython.py
+compile_nuitka.py
+
 # Generated NVDA Add-on packages
 *.nvda-addon
