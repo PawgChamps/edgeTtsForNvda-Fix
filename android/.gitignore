@@ -1,0 +1,19 @@
+# Build outputs
+.gradle/
+build/
+*/build/
+local.properties
+
+# Bootstrap Gradle distribution (downloaded on demand, ~130 MB)
+.gradle-dist/
+*.log
+
+# Signing — NEVER commit the keystore or its passwords
+keystore.properties
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+.DS_Store

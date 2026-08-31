@@ -1,6 +1,8 @@
-# Edge TTS For NVDA (Online Version)
+# Edge TTS for NVDA and Android
 
-Use Microsoft Edge's free, high-quality online neural text-to-speech (TTS) voices directly inside the NVDA screen reader. 
+Use Microsoft Edge's online neural text-to-speech (TTS) voices with the NVDA screen reader on Windows or as a system TTS engine on Android.
+
+**Downloads and setup:** <https://athee06.github.io/edgeTtsForNvda/>
 
 This add-on brings more than 300 natural-sounding, context-aware voices in dozens of languages to NVDA without requiring any expensive api keys.
 
@@ -16,9 +18,19 @@ This add-on brings more than 300 natural-sounding, context-aware voices in dozen
 ---
 
 ## Installation
+
+### Windows / NVDA
+
 1. Go to the [Releases](https://github.com/athee06/edgeTtsForNvda/releases) page on GitHub.
 2. Download the latest `.nvda-addon` package file.
 3. Open/Run the downloaded file to install it in NVDA, then restart NVDA.
+
+### Android
+
+1. Download the signed APK from the [Android v1.0 release](https://github.com/athee06/edgeTtsForNvda/releases/tag/android-v1.0).
+2. Install and open **Edge TTS**.
+3. Choose **Edge TTS** in Android's text-to-speech settings.
+4. Select a language and voice in the app. See the [Android documentation](android/README.md) for details.
 
 ---
 
@@ -39,3 +51,7 @@ If Microsoft adds new voices, you can update the menu by:
 
 ## License
 This add-on is distributed under the terms of the GNU General Public License (GPL) version 2.0 or later, as compatible with the NVDA screen reader license.
+
+## Independence and privacy notice
+
+This is an independent open-source accessibility project. It is not affiliated with, sponsored by, or endorsed by Microsoft. Speech requires an internet connection, and text is sent to Microsoft's online speech service for synthesis. The consumer endpoint used by this project is undocumented and may change or stop working without notice.

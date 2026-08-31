@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <!-- Language -->
+        <TextView
+            android:id="@+id/languageLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:labelFor="@+id/languageSpinner"
+            android:text="@string/language_label"
+            android:textSize="16sp"
+            android:paddingBottom="4dp" />
+
+        <Spinner
+            android:id="@+id/languageSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/language_label"
+            android:minHeight="48dp" />
+
+        <!-- Voice -->
+        <TextView
+            android:id="@+id/voiceLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:labelFor="@+id/voiceSpinner"
+            android:text="@string/voice_label"
+            android:textSize="16sp"
+            android:paddingTop="16dp"
+            android:paddingBottom="4dp" />
+
+        <Spinner
+            android:id="@+id/voiceSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/voice_label"
+            android:minHeight="48dp" />
+
+        <!-- Sample text -->
+        <TextView
+            android:id="@+id/sampleLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:labelFor="@+id/sampleText"
+            android:text="@string/sample_label"
+            android:textSize="16sp"
+            android:paddingTop="16dp"
+            android:paddingBottom="4dp" />
+
+        <EditText
+            android:id="@+id/sampleText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="textMultiLine"
+            android:minLines="2"
+            android:gravity="top"
+            android:importantForAutofill="no" />
+
+        <!-- Speech rate -->
+        <TextView
+            android:id="@+id/rateLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/rate_label"
+            android:textSize="16sp"
+            android:paddingTop="16dp" />
+
+        <SeekBar
+            android:id="@+id/rateSeek"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:minHeight="48dp" />
+
+        <!-- Pitch -->
+        <TextView
+            android:id="@+id/pitchLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/pitch_label"
+            android:textSize="16sp"
+            android:paddingTop="8dp" />
+
+        <SeekBar
+            android:id="@+id/pitchSeek"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:minHeight="48dp" />
+
+        <!-- Actions -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            style="?android:attr/buttonBarStyle"
+            android:paddingTop="16dp">
+
+            <Button
+                android:id="@+id/testButton"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/test" />
+
+            <Button
+                android:id="@+id/setButton"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/set_default" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/systemTtsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/open_system_tts" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="20dp"
+            android:textSize="14sp" />
+
+    </LinearLayout>
+</ScrollView>
