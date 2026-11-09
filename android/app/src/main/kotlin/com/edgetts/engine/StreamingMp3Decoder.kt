@@ -61,6 +61,8 @@ class Mp3StreamSplitter {
     /** Removes and returns the next complete frame, or null if none ready yet. */
     fun poll(): ByteArray? = synchronized(lock) { frames.poll() }
 
+    fun hasFrames(): Boolean = synchronized(lock) { frames.isNotEmpty() }
+
     /** True once the source is done and every buffered frame has been polled. */
     fun isDrained(): Boolean = synchronized(lock) { finished && frames.isEmpty() }
 
@@ -111,17 +113,38 @@ class StreamingMp3Decoder {
     private companion object {
         const val MIME = "audio/mpeg"
         const val TIMEOUT_US = 5_000L
+        /** Frames are waiting but the codec has accepted no input for this long. */
+        const val INPUT_STALL_MS = 2_000L
     }
 
     private var codec: MediaCodec? = null
+    private var format: MediaFormat? = null
 
     private fun ensureCodec(sampleRate: Int, channels: Int): MediaCodec {
         codec?.let { return it }
+        val f = MediaFormat.createAudioFormat(MIME, sampleRate, channels)
         val c = MediaCodec.createDecoderByType(MIME)
-        c.configure(MediaFormat.createAudioFormat(MIME, sampleRate, channels), null, null, 0)
+        c.configure(f, null, null, 0)
         c.start()
         codec = c
+        format = f
         return c
+    }
+
+    /**
+     * Readies the codec for the next utterance. Some vendor MP3 decoders stop
+     * accepting input after flush() following end-of-stream, so a full
+     * stop/configure/start cycle is used instead; on any failure the codec is
+     * released and recreated lazily.
+     */
+    private fun resetAfterEos(c: MediaCodec) {
+        val f = format
+        val ok = f != null && runCatching {
+            c.stop()
+            c.configure(f, null, null, 0)
+            c.start()
+        }.isSuccess
+        if (!ok) release()
     }
 
     /**
@@ -149,11 +172,14 @@ class StreamingMp3Decoder {
         var outputEos = false
         var pts = 0L
         var receivedAudio = false
+        var inputStallSince = 0L
+        var failed = true
 
         try {
             while (!outputEos) {
                 if (cancelled.get() || errored()) break
                 val nowMs = android.os.SystemClock.elapsedRealtime()
+                if (!receivedAudio && (pendingFrame != null || splitter.hasFrames())) receivedAudio = true
                 if (nowMs > deadlineMs) {
                     throw EdgeTtsException("Synthesis timeout")
                 }
@@ -165,6 +191,7 @@ class StreamingMp3Decoder {
                 if (!inputEos) {
                     val inIdx = c.dequeueInputBuffer(TIMEOUT_US)
                     if (inIdx >= 0) {
+                        inputStallSince = 0L
                         // Only remove audio from the queue once the codec has
                         // accepted an input buffer. A temporary dequeue timeout
                         // must not drop or reorder MP3 frames.
@@ -192,7 +219,13 @@ class StreamingMp3Decoder {
                             c.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                             inputEos = true
                         }
-                    } else if (pendingFrame == null && !splitter.isDrained()) {
+                    } else if (pendingFrame != null || splitter.hasFrames()) {
+                        if (inputStallSince == 0L) {
+                            inputStallSince = nowMs
+                        } else if (nowMs - inputStallSince > INPUT_STALL_MS) {
+                            throw EdgeTtsException("MP3 decoder stalled")
+                        }
+                    } else if (!splitter.isDrained()) {
                         // Awaiting more network data.
                         Thread.sleep(2)
                     }
@@ -212,10 +245,15 @@ class StreamingMp3Decoder {
                     if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputEos = true
                 }
             }
+            failed = false
         } finally {
             pendingFrame = null
-            // Flush so the codec is ready to be reused for the next utterance.
-            runCatching { c.flush() }
+            when {
+                failed -> release()
+                outputEos -> resetAfterEos(c)
+                // Cancelled/errored mid-stream: no EOS was queued, so flush is safe.
+                else -> if (runCatching { c.flush() }.isFailure) release()
+            }
         }
     }
 

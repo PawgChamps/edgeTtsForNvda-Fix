@@ -88,6 +88,7 @@ class EdgeTtsClient {
         val done = Object()
         @Volatile var finished = false
         @Volatile var error: Throwable? = null
+        @Volatile var audioBytes = 0L
 
         fun signalFinished() = synchronized(done) {
             finished = true; splitter.finish(); done.notifyAll()
@@ -102,9 +103,12 @@ class EdgeTtsClient {
         @Volatile lateinit var ws: WebSocket
         @Volatile var current: Utterance? = null
         @Volatile var dead = false
+        @Volatile var opened = false
         val createdAt = now()
         @Volatile var lastUsedAt = createdAt
     }
+
+    @Volatile private var clockSkewSec = 0.0
 
     private val poolLock = Any()
     private var active: Conn? = null
@@ -131,6 +135,10 @@ class EdgeTtsClient {
     private fun openConn(): Conn {
         val conn = Conn()
         val listener = object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                conn.opened = true
+            }
+
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (text.contains("Path:turn.end")) conn.current?.signalFinished()
             }
@@ -144,6 +152,7 @@ class EdgeTtsClient {
                 if (audioStart >= data.size) return
                 val header = String(data, 2, headerLen, Charsets.UTF_8)
                 if (header.contains("Path:audio")) {
+                    u.audioBytes += data.size - audioStart
                     u.splitter.feed(data, audioStart, data.size - audioStart)
                     synchronized(u.done) { u.done.notifyAll() }
                 }
@@ -161,7 +170,15 @@ class EdgeTtsClient {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 conn.dead = true
-                conn.current?.signalError(t)
+                if (response?.code == 403) {
+                    // Token is time-based: correct for device clock skew using the
+                    // server's Date header, as edge-tts does, so the retry succeeds.
+                    response.headers.getDate("Date")?.let {
+                        clockSkewSec = (it.time - System.currentTimeMillis()) / 1000.0
+                    }
+                }
+                val err = if (response != null) EdgeTtsException("HTTP ${response.code} from server", t) else t
+                conn.current?.signalError(err)
                 onConnLost(conn)
             }
         }
@@ -415,7 +432,8 @@ class EdgeTtsClient {
                     continue
                 }
                 val cause = u.error ?: decodeError
-                throw EdgeTtsException("Synthesis failed: ${cause?.message ?: "no audio"}", cause)
+                val stage = "connected=${if (conn.opened) "yes" else "no"}, audio bytes=${u.audioBytes}"
+                throw EdgeTtsException("Synthesis failed: ${cause?.message ?: "no audio"} ($stage)", cause)
             }
 
             conn.lastUsedAt = now()
@@ -427,7 +445,7 @@ class EdgeTtsClient {
 
     private fun buildRequest(): Request {
         val connectionId = randomHex(32)
-        val secGec = SecMsGec.generate()
+        val secGec = SecMsGec.generate(clockSkewSec)
         val url = "$WSS_URL&ConnectionId=$connectionId" +
             "&Sec-MS-GEC=$secGec&Sec-MS-GEC-Version=${SecMsGec.SEC_MS_GEC_VERSION}"
         return Request.Builder()
