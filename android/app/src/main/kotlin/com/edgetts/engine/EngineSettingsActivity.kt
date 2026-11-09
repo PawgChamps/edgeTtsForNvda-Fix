@@ -50,9 +50,8 @@ class EngineSettingsActivity : AppCompatActivity() {
     private var currentVoice: String? = null
     private var languageAdapter: SearchableAdapter? = null
     private var voiceAdapter: SearchableAdapter? = null
-    /** The dropdown field being edited, kept scrolled so its list opens below it. */
+    /** The dropdown field being edited; its list is kept sized to open below it. */
     private var activeDropdown: MaterialAutoCompleteTextView? = null
-    private var contentBottomPadding = 0
 
     private val previewClient = EdgeTtsClient()
     private val previewCancel = AtomicBoolean(false)
@@ -66,7 +65,6 @@ class EngineSettingsActivity : AppCompatActivity() {
 
         scroll = findViewById(R.id.scroll)
         content = findViewById(R.id.content)
-        contentBottomPadding = content.paddingBottom
         languageField = findViewById(R.id.languageField)
         voiceField = findViewById(R.id.voiceField)
         rateSlider = findViewById(R.id.rateSlider)
@@ -193,11 +191,7 @@ class EngineSettingsActivity : AppCompatActivity() {
                     keepDropdownBelow(field) { if (field.hasFocus()) field.showDropDown() }
                 }
             } else {
-                if (activeDropdown === field) {
-                    activeDropdown = null
-                    setContentBottomPadding(contentBottomPadding)
-                    field.dropDownHeight = android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-                }
+                if (activeDropdown === field) activeDropdown = null
                 field.setText(currentLabel().orEmpty(), false)
                 adapter()?.showAll()
             }
@@ -231,51 +225,34 @@ class EngineSettingsActivity : AppCompatActivity() {
 
     /**
      * Android opens a dropdown above its field whenever there is more room
-     * above. Scroll the field to the top of the visible area and size the list
-     * to the space left below it, so it always opens underneath.
+     * above. Size the list to the room between the field and the bottom of
+     * the visible area (above the keyboard), so it always opens underneath and
+     * scrolls within that space. Only if the field is so low that fewer than
+     * a few rows would fit is the page scrolled, just far enough.
      */
     private fun keepDropdownBelow(field: MaterialAutoCompleteTextView, then: () -> Unit) {
-        val gap = (8 * resources.displayMetrics.density).toInt()
-        // Let the field reach the top even near the end of the page; scrolling
-        // can only use the extra room after the next layout pass.
-        val padding = contentBottomPadding + scroll.height
-        if (content.paddingBottom != padding) {
-            setContentBottomPadding(padding)
-            content.viewTreeObserver.addOnGlobalLayoutListener(
-                object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-                    override fun onGlobalLayout() {
-                        content.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                        if (field.hasFocus()) keepDropdownBelow(field, then)
-                    }
-                }
-            )
-            return
-        }
-        val box = (field.parent?.parent as? View) ?: field
-        val boxRect = Rect().also { box.getDrawingRect(it) }
-        scroll.offsetDescendantRectToMyCoords(box, boxRect)
+        val density = resources.displayMetrics.density
+        val gap = (8 * density).toInt()
+        val minimum = (160 * density).toInt()
         val fieldRect = Rect().also { field.getDrawingRect(it) }
         scroll.offsetDescendantRectToMyCoords(field, fieldRect)
 
-        val targetScroll = (boxRect.top - gap).coerceAtLeast(0)
-        scroll.scrollTo(0, targetScroll)
-        val spaceBelow = scroll.height - (fieldRect.bottom - targetScroll) - gap
-        val minimum = (120 * resources.displayMetrics.density).toInt()
-        field.dropDownHeight = spaceBelow.coerceAtLeast(minimum)
-        then()
-    }
-
-    private fun setContentBottomPadding(bottom: Int) {
-        if (content.paddingBottom != bottom) {
-            content.setPadding(content.paddingLeft, content.paddingTop, content.paddingRight, bottom)
+        fun spaceBelow() = scroll.height - (fieldRect.bottom - scroll.scrollY) - gap
+        if (spaceBelow() < minimum) {
+            val maxScroll = (content.height - scroll.height).coerceAtLeast(0)
+            scroll.scrollTo(0, (scroll.scrollY + minimum - spaceBelow()).coerceAtMost(maxScroll))
         }
+        field.dropDownHeight = spaceBelow().coerceAtLeast((56 * density).toInt())
+        then()
     }
 
     private fun finishEditing(field: MaterialAutoCompleteTextView) {
         field.dismissDropDown()
         getSystemService(InputMethodManager::class.java)
             ?.hideSoftInputFromWindow(field.windowToken, 0)
-        field.clearFocus()
+        // clearFocus() alone hands focus to the first editable field, which
+        // would reopen a dropdown; park it on the page container instead.
+        content.requestFocus()
     }
 
     private fun selectedLanguageLabel(): String? = currentLocale?.let { Languages.displayName(it) }

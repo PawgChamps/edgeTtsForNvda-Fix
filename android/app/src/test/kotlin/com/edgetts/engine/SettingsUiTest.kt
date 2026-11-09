@@ -166,10 +166,15 @@ class SettingsUiTest {
     fun dropdownOpensBelowItsFieldEvenLowOnAShortScreen() {
         val activity = Robolectric.buildActivity(EngineSettingsActivity::class.java).setup().get()
         val voice = activity.findViewById<MaterialAutoCompleteTextView>(R.id.voiceField)
+        val language = activity.findViewById<MaterialAutoCompleteTextView>(R.id.languageField)
+        val content = activity.findViewById<android.view.View>(R.id.content)
+        val bottomPadding = content.paddingBottom
         waitUntil("voices") { voice.adapter != null }
+        assertTrue("a dropdown has focus at launch", !language.hasFocus() && !voice.hasFocus())
 
         voice.requestFocus()
         waitUntil("dropdown") { voice.isPopupShowing }
+        assertEquals("blank space added below the page", bottomPadding, content.paddingBottom)
         val listPopup = android.widget.AutoCompleteTextView::class.java.getDeclaredField("mPopup")
             .apply { isAccessible = true }.get(voice) as android.widget.ListPopupWindow
         val window = android.widget.ListPopupWindow::class.java.getDeclaredField("mPopup")
@@ -177,6 +182,12 @@ class SettingsUiTest {
         assertTrue("dropdown opened above the field", !window.isAboveAnchor)
         assertTrue(voice.dropDownHeight > 0)
         dropdownScreenshot(activity, voice, "dropdown_short_screen")
+
+        pick(voice, "Jenny, female")
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("focus jumped into a dropdown", !language.hasFocus() && !voice.hasFocus())
+        assertTrue("a dropdown reopened", !language.isPopupShowing && !voice.isPopupShowing)
+        assertEquals(bottomPadding, content.paddingBottom)
     }
 
     @Test
