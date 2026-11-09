@@ -47,6 +47,12 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".LanguagePickerActivity"
+            android:exported="false"
+            android:label="@string/choose_language"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- The "check voice data" activity the TTS framework calls -->
         <activity
             android:name=".CheckVoiceDataActivity"

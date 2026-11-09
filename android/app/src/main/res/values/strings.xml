@@ -4,33 +4,50 @@
     <string name="engine_label">Edge TTS</string>
     <string name="settings_label">Edge TTS Settings</string>
 
+    <!-- Language -->
     <string name="language_label">Language</string>
+    <string name="language_description">Language: %1$s, %2$s</string>
+    <string name="change">Change</string>
+    <string name="choose_language">Choose language</string>
+    <string name="search_hint">Search languages or voices</string>
+    <string name="back">Back</string>
+    <string name="selected">selected</string>
+    <plurals name="language_count">
+        <item quantity="one">%1$d language</item>
+        <item quantity="other">%1$d languages</item>
+    </plurals>
+    <plurals name="voice_count">
+        <item quantity="one">%1$d voice</item>
+        <item quantity="other">%1$d voices</item>
+    </plurals>
+
+    <!-- Voice -->
     <string name="voice_label">Voice</string>
+    <string name="voice_for">Voice for %1$s</string>
+    <string name="voice_hint">Apps reading this language will use the voice you pick.</string>
+    <string name="voice_entry">%1$s, %2$s</string>
+    <string name="gender_female">female</string>
+    <string name="gender_male">male</string>
+
+    <!-- Speech -->
+    <string name="speech_heading">Speech</string>
+    <string name="rate_label">Speech rate: %1$s</string>
+    <string name="rate_description">Speech rate</string>
+    <string name="pitch_label">Pitch: %1$s</string>
+    <string name="pitch_description">Pitch</string>
     <string name="sample_label">Sample text</string>
     <string name="default_sample">This is Microsoft Edge text to speech.</string>
-
-    <string name="rate_label">Speech rate: %1$s</string>
-    <string name="pitch_label">Pitch: %1$s</string>
-
-    <string name="test">Test</string>
-    <string name="set_default">Set as default</string>
-    <string name="open_system_tts">Open system TTS settings</string>
-
-    <string name="loading_voices">Loading voices…</string>
-    <plurals name="voices_loaded">
-        <item quantity="one">%1$d voice available</item>
-        <item quantity="other">%1$d voices available</item>
-    </plurals>
-    <string name="voices_error">Could not load voices: %1$s</string>
-    <string name="saved">Saved %1$s as the default voice</string>
+    <string name="play_sample">Play sample</string>
+    <string name="stop">Stop</string>
     <string name="testing">Speaking…</string>
     <string name="test_done">Done</string>
     <string name="test_error">Playback failed: %1$s</string>
-    <string name="recent_errors">Recent engine errors (newest first):\n%1$s</string>
 
-    <!-- Default-engine prompt -->
-    <string name="set_default_title">Set Edge TTS as default?</string>
-    <string name="set_default_message">Edge TTS is not your device\'s default text-to-speech engine. Would you like to set it now?</string>
-    <string name="yes">Yes</string>
-    <string name="no">No</string>
+    <!-- Status & system -->
+    <string name="loading_voices">Loading voices…</string>
+    <string name="voices_error">Could not load voices: %1$s</string>
+    <string name="open_system_tts">Open system text-to-speech settings</string>
+    <string name="not_default_message">Edge TTS is not your default text-to-speech engine, so other apps won\'t use it yet.</string>
+    <string name="recent_errors_heading">Recent engine errors</string>
+    <string name="clear">Clear</string>
 </resources>

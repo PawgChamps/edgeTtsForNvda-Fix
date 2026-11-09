@@ -21,6 +21,10 @@ object EngineErrorLog {
         prefs(context).edit().putString(KEY, entries.joinToString("\n")).apply()
     }
 
+    fun clear(context: Context) {
+        prefs(context).edit().remove(KEY).apply()
+    }
+
     fun read(context: Context): List<String> =
         prefs(context).getString(KEY, "").orEmpty().lines().filter { it.isNotBlank() }
 

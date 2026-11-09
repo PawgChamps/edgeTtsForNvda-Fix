@@ -121,17 +121,9 @@ class EdgeTtsService : TextToSpeechService() {
     override fun onGetDefaultVoiceNameFor(lang: String?, country: String?, variant: String?): String? {
         if (lang == null) return null
         val voices = loadCatalog().values
-        // Prefer an exact language+country match; fall back to language only.
-        var langOnly: String? = null
-        for (v in voices) {
-            val loc = localeOf(v.locale)
-            if (!loc.isO3Language.equals(lang, ignoreCase = true)) continue
-            if (!country.isNullOrEmpty() && loc.isO3Country.equals(country, ignoreCase = true)) {
-                return v.shortName
-            }
-            if (langOnly == null) langOnly = v.shortName
-        }
-        return langOnly
+        val locale = VoicePrefs.localeFor(this, lang, country, voices) ?: return null
+        return VoicePrefs.voiceFor(this, locale, voices)
+            ?.also { VoicePrefs.rememberIssuedDefault(this, it) }
     }
 
     // ---- Synthesis ---------------------------------------------------------
@@ -230,7 +222,14 @@ class EdgeTtsService : TextToSpeechService() {
     private fun resolveVoice(request: SynthesisRequest): String {
         // setVoice() path: the exact Voice.name we handed out comes back here.
         val requested = request.voiceName
-        if (!requested.isNullOrEmpty() && loadCatalog().containsKey(requested)) return requested
+        val catalog = loadCatalog()
+        val requestedVoice = requested?.let { catalog[it] }
+        if (requestedVoice != null) {
+            // A name we issued as a language default (not one the app chose)
+            // follows the user's current choice for that language.
+            if (!VoicePrefs.wasIssuedDefault(this, requestedVoice.shortName)) return requestedVoice.shortName
+            return VoicePrefs.voiceFor(this, requestedVoice.locale, catalog.values) ?: requestedVoice.shortName
+        }
 
         // setLanguage() path: getVoiceName() may be empty — map the locale.
         val lang = request.language
