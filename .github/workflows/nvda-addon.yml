@@ -48,3 +48,16 @@ jobs:
             NVDA add-on with the v2 Sec-MS-GEC token fix (resolves HTTP 403 from Microsoft's Read Aloud service), automatic recovery from dropped connections, and clock-skew correction.
 
             Built from ${{ github.sha }}. Open the `.nvda-addon` file with NVDA running to install, then restart NVDA.
+
+      - name: Remove older NVDA add-on releases
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ccr-371b5910-agg0pz')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: nvda-v${{ steps.build.outputs.version }}
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
+            | { grep '^nvda-v' || true; } | { grep -vxF "$KEEP" || true; } \
+            | while read -r tag; do
+                echo "Deleting $tag"
+                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+              done
