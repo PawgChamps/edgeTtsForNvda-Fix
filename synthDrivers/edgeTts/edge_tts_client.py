@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import struct
@@ -19,9 +18,10 @@ except Exception:
     import logging
     log = logging.getLogger("edgeTts")
 
-TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
+from .drm import TRUSTED_CLIENT_TOKEN, generate_sec_ms_gec_v2
+
 CHROMIUM_VERSION = "143.0.3650.75"
-SEC_MS_GEC_VERSION = f"1-{CHROMIUM_VERSION}"
+SEC_MS_GEC_VERSION = f"2-{CHROMIUM_VERSION}"
 VOICES_URL = (
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list"
     f"?trustedclienttoken={TRUSTED_CLIENT_TOKEN}"
@@ -48,12 +48,7 @@ AudioCallback = Callable[[bytes], None]
 
 
 def _generate_sec_ms_gec(clock_skew: float = 0) -> str:
-    ticks = time.time() + clock_skew
-    ticks += 11644473600
-    ticks -= ticks % 300
-    ticks *= 10_000_000
-    hash_input = f"{ticks:.0f}{TRUSTED_CLIENT_TOKEN}"
-    return hashlib.sha256(hash_input.encode()).hexdigest().upper()
+    return generate_sec_ms_gec_v2(clock_skew)
 
 
 def _random_hex(length: int = 32) -> str:
