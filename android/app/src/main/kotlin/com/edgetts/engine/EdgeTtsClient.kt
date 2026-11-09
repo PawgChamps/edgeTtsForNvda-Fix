@@ -54,7 +54,7 @@ class EdgeTtsClient {
         /** Overall ceiling for one utterance before we give up and reconnect. */
         private const val UTTERANCE_TIMEOUT_MS = 20_000L
         /** Edge streams the first audio within ~1s; silence past this means a dead socket. */
-        private const val FIRST_AUDIO_TIMEOUT_MS = 7_000L
+        private const val FIRST_AUDIO_TIMEOUT_MS = 10_000L
         /** How often the maintainer checks/refills the pool. */
         private const val MAINTAIN_INTERVAL_MS = 8_000L
         /** Recycle a connection older than this so the pool stays young/live. */
@@ -69,7 +69,9 @@ class EdgeTtsClient {
     }
 
     private val http = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .dns(FallbackDns)
+        // Per-address: a short timeout lets OkHttp move on to the next IP fast.
+        .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         // Auto WS pings keep idle connections warm and surface a dead peer fast.
         .pingInterval(8, TimeUnit.SECONDS)

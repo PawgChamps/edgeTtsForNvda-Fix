@@ -31,7 +31,8 @@ object EdgeVoices {
     private const val CACHE_MAX_AGE_MS = 86_400_000L // 24h, matches _VOICE_CACHE_MAX_AGE
 
     private val http = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .dns(FallbackDns)
+        .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
