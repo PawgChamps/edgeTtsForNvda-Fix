@@ -3,14 +3,14 @@ package com.edgetts.engine
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
-import android.widget.RadioGroup
 import android.widget.TextView
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.color.DynamicColors
-import com.google.android.material.radiobutton.MaterialRadioButton
 import com.google.android.material.slider.Slider
+import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.textfield.TextInputEditText
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
@@ -18,19 +18,16 @@ import kotlin.concurrent.thread
 import kotlin.math.roundToInt
 
 /**
- * The app's main screen. The user picks a language (searchable list) and a
- * voice for it; like Google TTS, each language keeps its own voice, which the
+ * The app's main screen. The user picks a language and a voice for it from
+ * searchable dropdowns; like Google TTS, each language keeps its own voice, which the
  * system engine then uses whenever an app reads that language. Rate and pitch
  * are saved as they change, and a sample can be played with the current
  * settings.
  */
 class EngineSettingsActivity : AppCompatActivity() {
 
-    private lateinit var languageCard: View
-    private lateinit var languageName: TextView
-    private lateinit var languageCode: TextView
-    private lateinit var voiceHeading: TextView
-    private lateinit var voiceGroup: RadioGroup
+    private lateinit var languageField: MaterialAutoCompleteTextView
+    private lateinit var voiceField: MaterialAutoCompleteTextView
     private lateinit var rateSlider: Slider
     private lateinit var pitchSlider: Slider
     private lateinit var rateLabel: TextView
@@ -44,27 +41,22 @@ class EngineSettingsActivity : AppCompatActivity() {
 
     private var catalog: List<EdgeVoice> = emptyList()
     private var currentLocale: String? = null
+    private var currentVoice: String? = null
+    private var languageAdapter: SearchableAdapter? = null
+    private var voiceAdapter: SearchableAdapter? = null
 
     private val previewClient = EdgeTtsClient()
     private val previewCancel = AtomicBoolean(false)
     @Volatile private var previewPlayer: PcmPlayer? = null
     private var playing = false
 
-    private val pickLanguage =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            result.data?.getStringExtra(LanguagePickerActivity.EXTRA_LOCALE)?.let { showLanguage(it) }
-        }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         DynamicColors.applyToActivityIfAvailable(this)
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
 
-        languageCard = findViewById(R.id.languageCard)
-        languageName = findViewById(R.id.languageName)
-        languageCode = findViewById(R.id.languageCode)
-        voiceHeading = findViewById(R.id.voiceHeading)
-        voiceGroup = findViewById(R.id.voiceGroup)
+        languageField = findViewById(R.id.languageField)
+        voiceField = findViewById(R.id.voiceField)
         rateSlider = findViewById(R.id.rateSlider)
         pitchSlider = findViewById(R.id.pitchSlider)
         rateLabel = findViewById(R.id.rateLabel)
@@ -79,13 +71,8 @@ class EngineSettingsActivity : AppCompatActivity() {
         sampleText.setText(getString(R.string.default_sample))
         setUpSliders()
 
-        languageCard.isEnabled = false
-        languageCard.setOnClickListener {
-            pickLanguage.launch(
-                Intent(this, LanguagePickerActivity::class.java)
-                    .putExtra(LanguagePickerActivity.EXTRA_LOCALE, currentLocale)
-            )
-        }
+        setUpDropdown(languageField, { languageAdapter }, ::selectedLanguageLabel) { showLanguage(it.value) }
+        setUpDropdown(voiceField, { voiceAdapter }, ::selectedVoiceLabel) { selectVoice(it.value) }
         playButton.setOnClickListener { if (playing) stopPreview() else onPlay() }
         findViewById<Button>(R.id.systemTtsButton).setOnClickListener { openSystemTtsSettings() }
         findViewById<Button>(R.id.makeDefaultButton).setOnClickListener { openSystemTtsSettings() }
@@ -115,18 +102,40 @@ class EngineSettingsActivity : AppCompatActivity() {
     // ---- Language & voice --------------------------------------------------
 
     private fun loadVoices() {
+        languageField.setText(getString(R.string.loading_voices), false)
         thread {
             val result = runCatching { EdgeVoices.list(applicationContext) }
             runOnUiThread {
                 result.onSuccess { list ->
                     catalog = list
-                    languageCard.isEnabled = true
+                    val adapter = buildLanguageAdapter(list)
+                    languageAdapter = adapter
+                    languageField.setAdapter(adapter)
+                    languageField.isEnabled = true
+                    voiceField.isEnabled = true
                     showLanguage(initialLocale(list))
                 }.onFailure {
-                    languageName.text = getString(R.string.voices_error, it.message ?: "unknown")
+                    languageField.setText(getString(R.string.voices_error, it.message ?: "unknown"), false)
                 }
             }
         }
+    }
+
+    private fun buildLanguageAdapter(list: List<EdgeVoice>): SearchableAdapter {
+        val byLocale = list.groupBy { it.locale }
+        val options = Languages.sorted(byLocale.keys).map { code ->
+            val voices = byLocale.getValue(code)
+            val count = resources.getQuantityString(R.plurals.voice_count, voices.size, voices.size)
+            val english = Locale.forLanguageTag(code).getDisplayName(Locale.ENGLISH)
+            val voiceNames = voices.joinToString(" ") { Languages.voiceName(it) }
+            SearchableAdapter.Option(
+                value = code,
+                label = Languages.displayName(code),
+                detail = "$code · $count",
+                searchText = "$english $code $voiceNames",
+            )
+        }
+        return SearchableAdapter(this, options)
     }
 
     private fun initialLocale(list: List<EdgeVoice>): String {
@@ -138,39 +147,81 @@ class EngineSettingsActivity : AppCompatActivity() {
         return if ("en-US" in locales) "en-US" else Languages.sorted(locales).first()
     }
 
-    private fun showLanguage(code: String) {
-        currentLocale = code
-        VoicePrefs.setSelectedLocale(this, code)
-        val name = Languages.displayName(code)
-        languageName.text = name
-        languageCode.text = code
-        languageCard.contentDescription = getString(R.string.language_description, name, code)
-        voiceHeading.text = getString(R.string.voice_for, name)
-
-        val voices = catalog.filter { it.locale == code }.sortedBy { Languages.voiceName(it) }
-        val chosen = VoicePrefs.voiceFor(this, code, voices)
-
-        voiceGroup.setOnCheckedChangeListener(null)
-        voiceGroup.removeAllViews()
-        val rowHeight = (48 * resources.displayMetrics.density).roundToInt()
-        for (voice in voices) {
-            val button = MaterialRadioButton(this).apply {
-                id = View.generateViewId()
-                tag = voice.shortName
-                text = getString(R.string.voice_entry, Languages.voiceName(voice), genderLabel(voice.gender))
-                minHeight = rowHeight
-            }
-            voiceGroup.addView(button)
-            if (voice.shortName == chosen) voiceGroup.check(button.id)
+    /**
+     * Wires an editable exposed-dropdown: the arrow (or tapping the field)
+     * lists every option, typing filters it, and picking one commits it. If
+     * the user types without picking, the field reverts to the current choice.
+     */
+    private fun setUpDropdown(
+        field: MaterialAutoCompleteTextView,
+        adapter: () -> SearchableAdapter?,
+        currentLabel: () -> String?,
+        onPick: (SearchableAdapter.Option) -> Unit,
+    ) {
+        field.setOnItemClickListener { _, _, position, _ ->
+            val option = adapter()?.getItem(position) ?: return@setOnItemClickListener
+            onPick(option)
+            finishEditing(field)
         }
-        voiceGroup.setOnCheckedChangeListener { group, checkedId ->
-            val voice = group.findViewById<View>(checkedId)?.tag as? String ?: return@setOnCheckedChangeListener
-            VoicePrefs.setVoiceFor(this, code, voice)
+        field.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId != EditorInfo.IME_ACTION_DONE) return@setOnEditorActionListener false
+            val a = adapter()
+            if (a != null && a.count > 0 && field.text.toString() != currentLabel()) onPick(a.getItem(0))
+            finishEditing(field)
+            true
+        }
+        field.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                // Open the full, scrollable list straight away; typing then filters it.
+                field.post {
+                    adapter()?.showAll()
+                    if (field.hasFocus()) field.showDropDown()
+                }
+            } else {
+                field.setText(currentLabel().orEmpty(), false)
+                adapter()?.showAll()
+            }
         }
     }
 
-    private fun selectedVoice(): String? =
-        voiceGroup.findViewById<View>(voiceGroup.checkedRadioButtonId)?.tag as? String
+    private fun finishEditing(field: MaterialAutoCompleteTextView) {
+        field.dismissDropDown()
+        getSystemService(InputMethodManager::class.java)
+            ?.hideSoftInputFromWindow(field.windowToken, 0)
+        field.clearFocus()
+    }
+
+    private fun selectedLanguageLabel(): String? = currentLocale?.let { Languages.displayName(it) }
+
+    private fun selectedVoiceLabel(): String? =
+        catalog.firstOrNull { it.shortName == currentVoice }?.let { voiceLabel(it) }
+
+    private fun voiceLabel(voice: EdgeVoice): String =
+        getString(R.string.voice_entry, Languages.voiceName(voice), genderLabel(voice.gender))
+
+    private fun showLanguage(code: String) {
+        currentLocale = code
+        VoicePrefs.setSelectedLocale(this, code)
+        languageAdapter?.let { it.selectedLabel = selectedLanguageLabel(); it.showAll() }
+        languageField.setText(selectedLanguageLabel(), false)
+
+        val voices = catalog.filter { it.locale == code }.sortedBy { Languages.voiceName(it) }
+        currentVoice = VoicePrefs.voiceFor(this, code, voices)
+        val adapter = SearchableAdapter(this, voices.map {
+            SearchableAdapter.Option(it.shortName, voiceLabel(it), null, it.shortName)
+        }).also { it.selectedLabel = selectedVoiceLabel() }
+        voiceAdapter = adapter
+        voiceField.setAdapter(adapter)
+        voiceField.setText(selectedVoiceLabel(), false)
+    }
+
+    private fun selectVoice(shortName: String) {
+        val locale = currentLocale ?: return
+        currentVoice = shortName
+        VoicePrefs.setVoiceFor(this, locale, shortName)
+        voiceAdapter?.let { it.selectedLabel = selectedVoiceLabel(); it.showAll() }
+        voiceField.setText(selectedVoiceLabel(), false)
+    }
 
     private fun genderLabel(gender: String): String = when (gender.lowercase(Locale.ROOT)) {
         "female" -> getString(R.string.gender_female)
@@ -231,7 +282,7 @@ class EngineSettingsActivity : AppCompatActivity() {
     // ---- Sample playback ---------------------------------------------------
 
     private fun onPlay() {
-        val voice = selectedVoice() ?: return
+        val voice = currentVoice ?: return
         val text = sampleText.text?.toString()?.trim().orEmpty()
             .ifEmpty { getString(R.string.default_sample) }
         val rate = sliderToRatePercent(rateSlider.value.roundToInt())

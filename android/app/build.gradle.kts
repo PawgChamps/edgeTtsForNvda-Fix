@@ -19,8 +19,8 @@ android {
         applicationId = "com.edgetts.engine"
         minSdk = 24
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.8"
+        versionCode = 10
+        versionName = "1.9"
 
         // Phone/tablet ABIs only. NOTE: this app is pure Kotlin/JVM (no native
         // .so libs), so the filter has no effect on the current output — a

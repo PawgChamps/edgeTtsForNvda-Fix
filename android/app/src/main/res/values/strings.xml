@@ -6,16 +6,9 @@
 
     <!-- Language -->
     <string name="language_label">Language</string>
-    <string name="language_description">Language: %1$s, %2$s</string>
-    <string name="change">Change</string>
-    <string name="choose_language">Choose language</string>
-    <string name="search_hint">Search languages or voices</string>
-    <string name="back">Back</string>
+    <string name="language_helper">Type to search by language, code or voice name</string>
+    <string name="voice_heading">Language and voice</string>
     <string name="selected">selected</string>
-    <plurals name="language_count">
-        <item quantity="one">%1$d language</item>
-        <item quantity="other">%1$d languages</item>
-    </plurals>
     <plurals name="voice_count">
         <item quantity="one">%1$d voice</item>
         <item quantity="other">%1$d voices</item>
@@ -23,8 +16,7 @@
 
     <!-- Voice -->
     <string name="voice_label">Voice</string>
-    <string name="voice_for">Voice for %1$s</string>
-    <string name="voice_hint">Apps reading this language will use the voice you pick.</string>
+    <string name="voice_hint">Apps reading this language use this voice</string>
     <string name="voice_entry">%1$s, %2$s</string>
     <string name="gender_female">female</string>
     <string name="gender_male">male</string>

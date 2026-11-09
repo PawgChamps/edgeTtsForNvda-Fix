@@ -5,13 +5,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Looper
-import android.view.View
-import android.widget.ListView
-import android.widget.RadioButton
-import android.widget.RadioGroup
-import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
-import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -71,55 +66,99 @@ class SettingsUiTest {
         File(out, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    @Test
-    fun settingsShowsDeviceLanguageAndSavesVoicePerLanguage() {
-        val activity = Robolectric.buildActivity(EngineSettingsActivity::class.java).setup().get()
-        val languageName = activity.findViewById<TextView>(R.id.languageName)
-        val group = activity.findViewById<RadioGroup>(R.id.voiceGroup)
-        waitUntil("voices") { group.childCount > 0 }
+    /** Screen plus the dropdown popup (a separate window) painted under its field. */
+    private fun dropdownScreenshot(activity: Activity, field: MaterialAutoCompleteTextView, name: String) {
+        val root = activity.window.decorView
+        val bitmap = Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        root.draw(canvas)
+        val popup = android.widget.AutoCompleteTextView::class.java.getDeclaredField("mPopup")
+            .apply { isAccessible = true }.get(field) as android.widget.ListPopupWindow
+        val list = popup.listView ?: return
+        val panel = list.rootView
+        val exactly = android.view.View.MeasureSpec.EXACTLY
+        val unspecified = android.view.View.MeasureSpec.UNSPECIFIED
+        panel.measure(
+            android.view.View.MeasureSpec.makeMeasureSpec(panel.width, exactly),
+            android.view.View.MeasureSpec.makeMeasureSpec(0, unspecified),
+        )
+        panel.layout(0, 0, panel.measuredWidth, panel.measuredHeight)
+        val location = IntArray(2).also { (field.parent.parent as android.view.View).getLocationInWindow(it) }
+        val anchor = field.parent.parent as android.view.View
+        canvas.save()
+        canvas.translate(location[0].toFloat(), (location[1] + anchor.height).toFloat())
+        panel.draw(canvas)
+        canvas.restore()
+        val out = File("build/screenshots").apply { mkdirs() }
+        File(out, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
 
-        assertEquals("English (United States)", languageName.text.toString())
-        val labels = (0 until group.childCount).map { (group.getChildAt(it) as RadioButton).text.toString() }
-        assertEquals(listOf("Andrew Multilingual, male", "Aria, female", "Jenny, female"), labels)
-        val checked = activity.findViewById<RadioButton>(group.checkedRadioButtonId)
-        assertEquals("Aria, female", checked.text.toString())
+    private fun labels(field: MaterialAutoCompleteTextView): List<String> =
+        (0 until field.adapter.count).map { field.adapter.getItem(it).toString() }
+
+    private fun pick(field: MaterialAutoCompleteTextView, label: String) {
+        val position = labels(field).indexOf(label)
+        check(position >= 0) { "$label not in ${labels(field)}" }
+        field.onItemClickListener.onItemClick(null, null, position, position.toLong())
+        shadowOf(Looper.getMainLooper()).idle()
+    }
+
+    @Test
+    fun dropdownsShowDeviceLanguageAndSaveVoicePerLanguage() {
+        val activity = Robolectric.buildActivity(EngineSettingsActivity::class.java).setup().get()
+        val language = activity.findViewById<MaterialAutoCompleteTextView>(R.id.languageField)
+        val voice = activity.findViewById<MaterialAutoCompleteTextView>(R.id.voiceField)
+        waitUntil("voices") { language.adapter != null && voice.adapter != null }
+
+        assertEquals("English (United States)", language.text.toString())
+        assertEquals("Aria, female", voice.text.toString())
+        assertEquals(
+            listOf(
+                "Afrikaans (South Africa)", "English (United Kingdom)", "English (United States)",
+                "French (France)", "German (Germany)", "Spanish (Mexico)", "Zulu (South Africa)",
+            ),
+            labels(language),
+        )
+        assertEquals(listOf("Andrew Multilingual, male", "Aria, female", "Jenny, female"), labels(voice))
         screenshot(activity, "settings")
 
-        (group.getChildAt(2) as RadioButton).performClick()
+        pick(voice, "Jenny, female")
+        assertEquals("Jenny, female", voice.text.toString())
         assertEquals("en-US-JennyNeural", VoicePrefs.voiceFor(context, "en-US", parsedCatalog()))
         // Other languages keep their own default.
         assertEquals("en-GB-RyanNeural", VoicePrefs.voiceFor(context, "en-GB", parsedCatalog()))
     }
 
     @Test
-    fun languagePickerIsAlphabeticalAndSearchable() {
-        val activity = Robolectric.buildActivity(LanguagePickerActivity::class.java).setup().get()
-        val list = activity.findViewById<ListView>(R.id.languageList)
-        waitUntil("languages") { list.adapter.count > 0 }
+    fun languageDropdownFiltersByNameAndVoiceAndRevertsUnpickedText() {
+        val activity = Robolectric.buildActivity(EngineSettingsActivity::class.java).setup().get()
+        val language = activity.findViewById<MaterialAutoCompleteTextView>(R.id.languageField)
+        val voice = activity.findViewById<MaterialAutoCompleteTextView>(R.id.voiceField)
+        waitUntil("voices") { language.adapter != null }
 
-        val names = (0 until list.adapter.count).map { (list.adapter.getItem(it) as Any).let(::entryName) }
-        assertEquals(
-            listOf(
-                "Afrikaans (South Africa)", "English (United Kingdom)", "English (United States)",
-                "French (France)", "German (Germany)", "Spanish (Mexico)", "Zulu (South Africa)",
-            ),
-            names,
-        )
-        screenshot(activity, "picker")
+        language.requestFocus()
+        language.setText("sonia")
+        waitUntil("filter by voice name") { labels(language) == listOf("English (United Kingdom)") }
+        pick(language, "English (United Kingdom)")
+        assertEquals("English (United Kingdom)", language.text.toString())
+        assertEquals(listOf("Ryan, male", "Sonia, female"), labels(voice))
+        assertEquals("Ryan, male", voice.text.toString())
 
-        val search = activity.findViewById<TextInputEditText>(R.id.searchField)
-        search.setText("sonia")
+        language.requestFocus()
+        language.setText("south africa")
+        waitUntil("filter by country") {
+            labels(language) == listOf("Afrikaans (South Africa)", "Zulu (South Africa)")
+        }
+        language.showDropDown()
         shadowOf(Looper.getMainLooper()).idle()
-        assertEquals(listOf("English (United Kingdom)"), shownNames(list))
+        dropdownScreenshot(activity, language, "dropdown_search")
 
-        search.setText("FRANCAIS fr")
+        language.setText("xyz")
+        waitUntil("no matches") { language.adapter.count == 0 }
+        voice.requestFocus() // leave without picking
         shadowOf(Looper.getMainLooper()).idle()
-        assertEquals(emptyList<String>(), shownNames(list))
-
-        search.setText("south africa")
-        shadowOf(Looper.getMainLooper()).idle()
-        assertEquals(listOf("Afrikaans (South Africa)", "Zulu (South Africa)"), shownNames(list))
-        screenshot(activity, "picker_search")
+        assertEquals("English (United Kingdom)", language.text.toString())
+        assertEquals(7, language.adapter.count)
     }
 
     @Test
@@ -142,12 +181,4 @@ class SettingsUiTest {
 
     private fun parsedCatalog(): List<EdgeVoice> = EdgeVoices.cachedOnly(context)
 
-    private fun shownNames(list: ListView): List<String> =
-        (0 until list.adapter.count).map { entryName(list.adapter.getItem(it)) }
-
-    private fun entryName(entry: Any): String =
-        entry.javaClass.getDeclaredField("name").apply { isAccessible = true }.get(entry) as String
-
-    @Suppress("unused")
-    private fun visible(view: View) = view.visibility == View.VISIBLE
 }
