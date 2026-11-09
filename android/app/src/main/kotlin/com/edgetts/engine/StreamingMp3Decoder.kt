@@ -174,6 +174,10 @@ class StreamingMp3Decoder {
         var receivedAudio = false
         var inputStallSince = 0L
         var failed = true
+        // An input buffer we own but have not queued yet. It must be held until
+        // audio arrives: dropping it leaks it, and after a few network waits the
+        // codec has no input buffers left and stalls for good.
+        var heldInput = -1
 
         try {
             while (!outputEos) {
@@ -189,7 +193,8 @@ class StreamingMp3Decoder {
 
                 // ---- feed input (whole frames only, packed per buffer) ----
                 if (!inputEos) {
-                    val inIdx = c.dequeueInputBuffer(TIMEOUT_US)
+                    if (heldInput < 0) heldInput = c.dequeueInputBuffer(TIMEOUT_US)
+                    val inIdx = heldInput
                     if (inIdx >= 0) {
                         inputStallSince = 0L
                         // Only remove audio from the queue once the codec has
@@ -214,10 +219,15 @@ class StreamingMp3Decoder {
                                 ib.put(next); written += next.size
                             }
                             c.queueInputBuffer(inIdx, 0, written, pts, 0)
+                            heldInput = -1
                             pts += 24_000L
                         } else if (splitter.isDrained()) {
                             c.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            heldInput = -1
                             inputEos = true
+                        } else {
+                            // Awaiting more network data; keep holding the buffer.
+                            Thread.sleep(2)
                         }
                     } else if (pendingFrame != null || splitter.hasFrames()) {
                         if (inputStallSince == 0L) {
