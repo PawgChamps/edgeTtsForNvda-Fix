@@ -152,6 +152,34 @@ class TestTimeouts(StreamerTestCase):
             self.speak()
         self.assertEqual(connect.call_count, 1)
 
+    def test_slow_playback_backpressure_is_not_a_stall(self):
+        class SlowDecoder:
+            fed = []
+
+            def __init__(self, pool, on_audio=None):
+                pass
+
+            def feed(self, data):
+                time.sleep(0.3)  # longer than the 0.2s stall timeout
+                self.fed.append(data)
+
+            def finish(self):
+                pass
+
+            def close(self):
+                pass
+
+        frames = [("binary", _audio_frame(b"A%d" % i)) for i in range(3)]
+        connect, _ = self.connections(frames + GOOD[1:])
+        with mock.patch.object(client, "StreamingMp3Decoder", SlowDecoder):
+            self.streamer.speak("Long passage", "en-US-AriaNeural", on_audio=lambda pcm: None)
+        self.assertEqual(SlowDecoder.fed, [b"A0", b"A1", b"A2"])
+        self.assertEqual(connect.call_count, 1)
+
+    def test_control_characters_are_replaced(self):
+        ssml = client._build_ssml("a\x0bb\x0cc\x00d\te\nf & g", "voice")
+        self.assertIn("a b c d\te\nf &amp; g", ssml)
+
     def test_cancel_while_waiting(self):
         self.connections([])
         cancel = threading.Event()

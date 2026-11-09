@@ -65,7 +65,12 @@ def _js_timestamp() -> str:
     return time.strftime("%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)", time.gmtime())
 
 
+_INCOMPATIBLE_CHARS = {c: " " for c in (*range(0, 9), 11, 12, *range(14, 32))}
+
+
 def _xml_escape(text: str) -> str:
+    # Control characters the service rejects; replaced with spaces as edge-tts does.
+    text = text.translate(_INCOMPATIBLE_CHARS)
     return (
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -400,6 +405,9 @@ class EdgeTtsStreamer:
                             decoder.feed(audio_data)
                         else:
                             mp3_parts.append(audio_data)
+                        # feed() blocks while playback catches up on long
+                        # passages; that wait is not a network stall.
+                        last_data = time.monotonic()
 
                 elif opcode == websocket.ABNF.OPCODE_TEXT:
                     text_data = data if isinstance(data, str) else data.decode("utf-8", errors="replace")

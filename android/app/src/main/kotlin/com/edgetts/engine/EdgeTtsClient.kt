@@ -51,8 +51,6 @@ class EdgeTtsClient {
                 "(KHTML, like Gecko) Chrome/${SecMsGec.CHROMIUM_VERSION} Safari/537.36 " +
                 "Edg/${SecMsGec.CHROMIUM_VERSION}"
 
-        /** Overall ceiling for one utterance before we give up and reconnect. */
-        private const val UTTERANCE_TIMEOUT_MS = 20_000L
         /** Edge streams the first audio within ~1s; silence past this means a dead socket. */
         private const val FIRST_AUDIO_TIMEOUT_MS = 10_000L
         /** How often the maintainer checks/refills the pool. */
@@ -389,7 +387,6 @@ class EdgeTtsClient {
             conn.ws.send(ssmlMsg)
 
             val start = now()
-            val deadline = start + UTTERANCE_TIMEOUT_MS
             var emitted = false
             val decodeError: Throwable? = try {
                 decoder.decode(
@@ -398,7 +395,6 @@ class EdgeTtsClient {
                     channels = CHANNELS,
                     cancelled = cancelled,
                     errored = { u.error != null },
-                    deadlineMs = deadline,
                     firstAudioDeadlineMs = start + FIRST_AUDIO_TIMEOUT_MS,
                 ) { pcm ->
                     if (!cancelled.get()) { emitted = true; sink.onAudio(pcm) }

@@ -3,6 +3,13 @@ package com.edgetts.engine
 /** Port of `_build_ssml` / `_xml_escape` / `_expand_voice_name` from the add-on. */
 object Ssml {
 
+    /** Control characters the service rejects; replaced with spaces as edge-tts does. */
+    private fun removeIncompatibleCharacters(text: String): String =
+        text.map { ch ->
+            val code = ch.code
+            if (code in 0..8 || code in 11..12 || code in 14..31) ' ' else ch
+        }.joinToString("")
+
     private fun xmlEscape(text: String): String =
         text.replace("&", "&amp;")
             .replace("<", "&lt;")
@@ -32,7 +39,7 @@ object Ssml {
         pitch: String = "+0Hz",
         volume: String = "+0%",
     ): String {
-        val escaped = xmlEscape(text)
+        val escaped = xmlEscape(removeIncompatibleCharacters(text))
         val fullVoice = expandVoiceName(voice)
         return "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>" +
             "<voice name='$fullVoice'>" +
