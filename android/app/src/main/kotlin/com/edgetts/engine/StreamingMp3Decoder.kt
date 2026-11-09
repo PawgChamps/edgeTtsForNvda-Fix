@@ -135,6 +135,7 @@ class StreamingMp3Decoder {
         cancelled: AtomicBoolean,
         errored: () -> Boolean,
         deadlineMs: Long,
+        firstAudioDeadlineMs: Long = deadlineMs,
         onPcm: (ByteArray) -> Unit,
     ) {
         val c = try {
@@ -147,12 +148,17 @@ class StreamingMp3Decoder {
         var inputEos = false
         var outputEos = false
         var pts = 0L
+        var receivedAudio = false
 
         try {
             while (!outputEos) {
                 if (cancelled.get() || errored()) break
-                if (android.os.SystemClock.elapsedRealtime() > deadlineMs) {
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                if (nowMs > deadlineMs) {
                     throw EdgeTtsException("Synthesis timeout")
+                }
+                if (!receivedAudio && nowMs > firstAudioDeadlineMs) {
+                    throw EdgeTtsException("No audio received from server")
                 }
 
                 // ---- feed input (whole frames only, packed per buffer) ----
@@ -165,6 +171,7 @@ class StreamingMp3Decoder {
                         val frame = pendingFrame?.also { pendingFrame = null }
                             ?: splitter.poll()
                         if (frame != null) {
+                            receivedAudio = true
                             val ib = c.getInputBuffer(inIdx)!!
                             ib.clear()
                             ib.put(frame)

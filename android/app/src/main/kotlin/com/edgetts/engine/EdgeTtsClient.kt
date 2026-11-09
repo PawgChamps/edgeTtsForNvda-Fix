@@ -1,5 +1,8 @@
 package com.edgetts.engine
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -50,6 +53,8 @@ class EdgeTtsClient {
 
         /** Overall ceiling for one utterance before we give up and reconnect. */
         private const val UTTERANCE_TIMEOUT_MS = 20_000L
+        /** Edge streams the first audio within ~1s; silence past this means a dead socket. */
+        private const val FIRST_AUDIO_TIMEOUT_MS = 7_000L
         /** How often the maintainer checks/refills the pool. */
         private const val MAINTAIN_INTERVAL_MS = 8_000L
         /** Recycle a connection older than this so the pool stays young/live. */
@@ -173,6 +178,14 @@ class EdgeTtsClient {
         wakeMaintainer()
     }
 
+    /** Opens a new connection and makes it the active one, bypassing the pool. */
+    private fun acquireFresh(): Conn {
+        val c = openConn()
+        synchronized(poolLock) { active = c }
+        wakeMaintainer()
+        return c
+    }
+
     /** Returns a live connection as the active one (cold-opens only if pool empty). */
     private fun acquire(): Conn {
         synchronized(poolLock) {
@@ -269,6 +282,46 @@ class EdgeTtsClient {
         wakeMaintainer()
     }
 
+    // ---- Network changes ---------------------------------------------------
+
+    private var connectivity: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var currentNetwork: Network? = null
+
+    /**
+     * Drops pooled connections whenever the default network changes (VPN
+     * toggled, Wi-Fi <-> mobile). Sockets opened on the old network are
+     * aborted by the OS ("Software caused connection abort") or silently
+     * black-holed, so reusing them only produces errors and timeouts.
+     */
+    fun watchNetwork(context: Context) {
+        if (networkCallback != null) return
+        val cm = context.applicationContext.getSystemService(ConnectivityManager::class.java) ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val previous = currentNetwork
+                currentNetwork = network
+                if (previous != null && previous != network) onNetworkChanged()
+            }
+
+            override fun onLost(network: Network) {
+                if (currentNetwork == network) {
+                    currentNetwork = null
+                    onNetworkChanged()
+                }
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb) }.onSuccess {
+            connectivity = cm
+            networkCallback = cb
+        }
+    }
+
+    private fun onNetworkChanged() {
+        close()
+        wakeMaintainer()
+    }
+
     /** Drops all pooled connections (keeps the maintainer + decoder alive). */
     fun close() {
         val conns = synchronized(poolLock) {
@@ -280,6 +333,8 @@ class EdgeTtsClient {
     /** Final teardown: stops the maintainer, closes connections, frees the codec. */
     fun shutdown() {
         shutdownFlag = true
+        networkCallback?.let { cb -> runCatching { connectivity?.unregisterNetworkCallback(cb) } }
+        networkCallback = null
         wakeMaintainer()
         close()
         decoder.release()
@@ -310,11 +365,12 @@ class EdgeTtsClient {
         while (true) {
             if (cancelled.get()) return
             val u = Utterance()
-            val conn = acquire()
+            val conn = if (attempt == 0) acquire() else acquireFresh()
             conn.current = u
             conn.ws.send(ssmlMsg)
 
-            val deadline = now() + UTTERANCE_TIMEOUT_MS
+            val start = now()
+            val deadline = start + UTTERANCE_TIMEOUT_MS
             var emitted = false
             val decodeError: Throwable? = try {
                 decoder.decode(
@@ -324,6 +380,7 @@ class EdgeTtsClient {
                     cancelled = cancelled,
                     errored = { u.error != null },
                     deadlineMs = deadline,
+                    firstAudioDeadlineMs = start + FIRST_AUDIO_TIMEOUT_MS,
                 ) { pcm ->
                     if (!cancelled.get()) { emitted = true; sink.onAudio(pcm) }
                 }
@@ -348,7 +405,13 @@ class EdgeTtsClient {
             val failed = u.error != null || decodeError != null || !emitted
             if (failed) {
                 retire(conn)
-                if (attempt == 0) { attempt++; continue }  // retry once on the spare
+                if (attempt == 0 && !emitted) {
+                    // The spare may be just as stale (e.g. after a network
+                    // change), so drop the pool and retry on a fresh socket.
+                    close()
+                    attempt++
+                    continue
+                }
                 val cause = u.error ?: decodeError
                 throw EdgeTtsException("Synthesis failed: ${cause?.message ?: "no audio"}", cause)
             }

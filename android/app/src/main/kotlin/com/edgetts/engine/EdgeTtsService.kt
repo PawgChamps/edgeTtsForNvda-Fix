@@ -36,6 +36,7 @@ class EdgeTtsService : TextToSpeechService() {
         Thread { loadCatalog() }.start()
         // Open the WebSocket ahead of the first utterance so the TLS + WS
         // handshake cost isn't paid on the first speak.
+        client.watchNetwork(this)
         client.prewarm()
     }
 

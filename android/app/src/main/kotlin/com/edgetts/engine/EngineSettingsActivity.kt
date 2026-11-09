@@ -86,6 +86,7 @@ class EngineSettingsActivity : Activity() {
         loadVoices()
         maybePromptSetDefault()
         // Warm the connection so the first Test tap doesn't pay the handshake.
+        previewClient.watchNetwork(this)
         previewClient.prewarm()
     }
 
