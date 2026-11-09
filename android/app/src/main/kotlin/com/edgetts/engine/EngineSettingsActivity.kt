@@ -1,6 +1,7 @@
 package com.edgetts.engine
 
 import android.content.Intent
+import android.database.DataSetObserver
 import android.graphics.Rect
 import android.os.Bundle
 import android.view.View
@@ -10,6 +11,7 @@ import androidx.core.view.WindowInsetsCompat
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.color.DynamicColors
@@ -29,6 +31,10 @@ import kotlin.math.roundToInt
  * settings.
  */
 class EngineSettingsActivity : AppCompatActivity() {
+
+    private companion object {
+        const val MAX_VISIBLE_ROWS = 3
+    }
 
     private lateinit var scroll: ScrollView
     private lateinit var content: View
@@ -122,6 +128,7 @@ class EngineSettingsActivity : AppCompatActivity() {
                     val adapter = buildLanguageAdapter(list)
                     languageAdapter = adapter
                     languageField.setAdapter(adapter)
+                    resizeOnFilter(languageField, adapter)
                     languageField.isEnabled = true
                     voiceField.isEnabled = true
                     showLanguage(initialLocale(list))
@@ -187,7 +194,8 @@ class EngineSettingsActivity : AppCompatActivity() {
                 // Open the full, scrollable list straight away; typing then filters it.
                 field.post {
                     if (!field.hasFocus()) return@post
-                    adapter()?.showAll()
+                    // Unless typing has already started, show every entry.
+                    if (field.text.toString() == currentLabel()) adapter()?.showAll()
                     keepDropdownBelow(field) { if (field.hasFocus()) field.showDropDown() }
                 }
             } else {
@@ -225,25 +233,51 @@ class EngineSettingsActivity : AppCompatActivity() {
 
     /**
      * Android opens a dropdown above its field whenever there is more room
-     * above. Size the list to the room between the field and the bottom of
-     * the visible area (above the keyboard), so it always opens underneath and
-     * scrolls within that space. Only if the field is so low that fewer than
-     * a few rows would fit is the page scrolled, just far enough.
+     * above. The list is sized to its entries, at most [MAX_VISIBLE_ROWS] rows
+     * (longer lists scroll), and if that would not fit between the field and
+     * the bottom of the visible area (above the keyboard) the page is
+     * scrolled just far enough, so it always opens underneath.
      */
     private fun keepDropdownBelow(field: MaterialAutoCompleteTextView, then: () -> Unit) {
         val density = resources.displayMetrics.density
         val gap = (8 * density).toInt()
-        val minimum = (160 * density).toInt()
+        val wanted = dropdownHeight(field)
         val fieldRect = Rect().also { field.getDrawingRect(it) }
         scroll.offsetDescendantRectToMyCoords(field, fieldRect)
 
         fun spaceBelow() = scroll.height - (fieldRect.bottom - scroll.scrollY) - gap
-        if (spaceBelow() < minimum) {
+        if (spaceBelow() < wanted) {
             val maxScroll = (content.height - scroll.height).coerceAtLeast(0)
-            scroll.scrollTo(0, (scroll.scrollY + minimum - spaceBelow()).coerceAtMost(maxScroll))
+            scroll.scrollTo(0, (scroll.scrollY + wanted - spaceBelow()).coerceAtMost(maxScroll))
         }
-        field.dropDownHeight = spaceBelow().coerceAtLeast((56 * density).toInt())
+        field.dropDownHeight = minOf(wanted, spaceBelow()).coerceAtLeast((56 * density).toInt())
         then()
+    }
+
+    /** Height of the first rows (up to [MAX_VISIBLE_ROWS]) plus the popup's padding. */
+    private fun dropdownHeight(field: MaterialAutoCompleteTextView): Int {
+        val adapter = field.adapter ?: return 0
+        val rows = minOf(adapter.count, MAX_VISIBLE_ROWS)
+        val parent = FrameLayout(this)
+        val widthSpec = View.MeasureSpec.makeMeasureSpec(field.width, View.MeasureSpec.EXACTLY)
+        val heightSpec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        var total = 0
+        for (i in 0 until rows) {
+            val row = adapter.getView(i, null, parent)
+            row.measure(widthSpec, heightSpec)
+            total += row.measuredHeight
+        }
+        val padding = Rect().also { field.dropDownBackground?.getPadding(it) }
+        return total + padding.top + padding.bottom
+    }
+
+    /** Typing changes how many entries match, so the list height follows. */
+    private fun resizeOnFilter(field: MaterialAutoCompleteTextView, adapter: SearchableAdapter) {
+        adapter.registerDataSetObserver(object : DataSetObserver() {
+            override fun onChanged() {
+                if (field.hasFocus() && field.adapter === adapter) keepDropdownBelow(field) {}
+            }
+        })
     }
 
     private fun finishEditing(field: MaterialAutoCompleteTextView) {
@@ -276,6 +310,7 @@ class EngineSettingsActivity : AppCompatActivity() {
         }).also { it.selectedLabel = selectedVoiceLabel() }
         voiceAdapter = adapter
         voiceField.setAdapter(adapter)
+        resizeOnFilter(voiceField, adapter)
         voiceField.setText(selectedVoiceLabel(), false)
     }
 

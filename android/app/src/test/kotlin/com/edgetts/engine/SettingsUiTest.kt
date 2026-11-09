@@ -93,6 +93,22 @@ class SettingsUiTest {
         File(out, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
+    private fun popupWindow(field: MaterialAutoCompleteTextView): android.widget.PopupWindow {
+        val listPopup = android.widget.AutoCompleteTextView::class.java.getDeclaredField("mPopup")
+            .apply { isAccessible = true }.get(field) as android.widget.ListPopupWindow
+        return android.widget.ListPopupWindow::class.java.getDeclaredField("mPopup")
+            .apply { isAccessible = true }.get(listPopup) as android.widget.PopupWindow
+    }
+
+    /** Asserts the open list is exactly [rows] entries tall (plus the popup padding). */
+    private fun assertVisibleRows(field: MaterialAutoCompleteTextView, rows: Int) {
+        val listPopup = android.widget.AutoCompleteTextView::class.java.getDeclaredField("mPopup")
+            .apply { isAccessible = true }.get(field) as android.widget.ListPopupWindow
+        val rowHeight = listPopup.listView!!.getChildAt(0).height
+        val padding = android.graphics.Rect().also { field.dropDownBackground.getPadding(it) }
+        assertEquals("visible rows", rows * rowHeight + padding.top + padding.bottom, popupWindow(field).height)
+    }
+
     private fun labels(field: MaterialAutoCompleteTextView): List<String> =
         (0 until field.adapter.count).map { field.adapter.getItem(it).toString() }
 
@@ -137,8 +153,12 @@ class SettingsUiTest {
         waitUntil("voices") { language.adapter != null }
 
         language.requestFocus()
+        waitUntil("dropdown") { language.isPopupShowing }
+        assertVisibleRows(language, 3) // 7 languages: three rows, then scroll
+
         language.setText("sonia")
         waitUntil("filter by voice name") { labels(language) == listOf("English (United Kingdom)") }
+        waitUntil("one row") { runCatching { assertVisibleRows(language, 1) }.isSuccess }
         pick(language, "English (United Kingdom)")
         assertEquals("English (United Kingdom)", language.text.toString())
         assertEquals(listOf("Ryan, male", "Sonia, female"), labels(voice))
@@ -149,6 +169,7 @@ class SettingsUiTest {
         waitUntil("filter by country") {
             labels(language) == listOf("Afrikaans (South Africa)", "Zulu (South Africa)")
         }
+        waitUntil("two rows") { runCatching { assertVisibleRows(language, 2) }.isSuccess }
         language.showDropDown()
         shadowOf(Looper.getMainLooper()).idle()
         dropdownScreenshot(activity, language, "dropdown_search")
@@ -180,6 +201,7 @@ class SettingsUiTest {
         val window = android.widget.ListPopupWindow::class.java.getDeclaredField("mPopup")
             .apply { isAccessible = true }.get(listPopup) as android.widget.PopupWindow
         assertTrue("dropdown opened above the field", !window.isAboveAnchor)
+        assertVisibleRows(voice, 3)
         assertTrue(voice.dropDownHeight > 0)
         dropdownScreenshot(activity, voice, "dropdown_short_screen")
 
