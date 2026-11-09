@@ -62,16 +62,3 @@ jobs:
             Built from ${{ github.sha }}.
 
             This APK is signed with a debug key, not the release key. If you have a release-signed version installed, uninstall it first.
-
-      - name: Remove older Android releases
-        if: steps.version.outputs.name
-        env:
-          GH_TOKEN: ${{ github.token }}
-          KEEP: android-v${{ steps.version.outputs.name }}-debug
-        run: |
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
-            | { grep '^android-v' || true; } | { grep -vxF "$KEEP" || true; } \
-            | while read -r tag; do
-                echo "Deleting $tag"
-                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
-              done
