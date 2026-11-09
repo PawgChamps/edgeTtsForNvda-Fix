@@ -1,0 +1,64 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: android
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          cmdline-tools-version: "11076708"
+          packages: "platforms;android-36 build-tools;36.0.0"
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Read version name
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ccr-371b5910-agg0pz')
+        id: version
+        run: echo "name=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
+
+      - name: Rename APK for release
+        if: steps.version.outputs.name
+        run: cp app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/edge-tts-engine-${{ steps.version.outputs.name }}-debug.apk"
+
+      - name: Publish debug APK to GitHub Releases
+        if: steps.version.outputs.name
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-v${{ steps.version.outputs.name }}-debug
+          name: Edge TTS Engine ${{ steps.version.outputs.name }} (debug)
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          files: android/app/build/outputs/apk/debug/edge-tts-engine-${{ steps.version.outputs.name }}-debug.apk
+          body: |
+            Debug build of the Android Edge TTS engine with the v2 Sec-MS-GEC token fix (resolves HTTP 403 from Microsoft's Read Aloud service).
+
+            Built from ${{ github.sha }}.
+
+            This APK is signed with a debug key, not the release key. If you have a release-signed version installed, uninstall it first.

@@ -61,6 +61,8 @@ class Mp3StreamSplitter {
     /** Removes and returns the next complete frame, or null if none ready yet. */
     fun poll(): ByteArray? = synchronized(lock) { frames.poll() }
 
+    fun hasFrames(): Boolean = synchronized(lock) { frames.isNotEmpty() }
+
     /** True once the source is done and every buffered frame has been polled. */
     fun isDrained(): Boolean = synchronized(lock) { finished && frames.isEmpty() }
 
@@ -111,22 +113,43 @@ class StreamingMp3Decoder {
     private companion object {
         const val MIME = "audio/mpeg"
         const val TIMEOUT_US = 5_000L
+        /** No input accepted and no output produced for this long means a dead stream or codec. */
+        const val PROGRESS_TIMEOUT_MS = 10_000L
     }
 
     private var codec: MediaCodec? = null
+    private var format: MediaFormat? = null
 
     private fun ensureCodec(sampleRate: Int, channels: Int): MediaCodec {
         codec?.let { return it }
+        val f = MediaFormat.createAudioFormat(MIME, sampleRate, channels)
         val c = MediaCodec.createDecoderByType(MIME)
-        c.configure(MediaFormat.createAudioFormat(MIME, sampleRate, channels), null, null, 0)
+        c.configure(f, null, null, 0)
         c.start()
         codec = c
+        format = f
         return c
     }
 
     /**
+     * Readies the codec for the next utterance. Some vendor MP3 decoders stop
+     * accepting input after flush() following end-of-stream, so a full
+     * stop/configure/start cycle is used instead; on any failure the codec is
+     * released and recreated lazily.
+     */
+    private fun resetAfterEos(c: MediaCodec) {
+        val f = format
+        val ok = f != null && runCatching {
+            c.stop()
+            c.configure(f, null, null, 0)
+            c.start()
+        }.isSuccess
+        if (!ok) release()
+    }
+
+    /**
      * Pumps frames from [splitter] through the decoder until the splitter is
-     * drained (or [cancelled] / [errored] / the deadline). Emits PCM via [onPcm].
+     * drained (or [cancelled] / [errored] / no progress). Emits PCM via [onPcm].
      */
     fun decode(
         splitter: Mp3StreamSplitter,
@@ -134,7 +157,7 @@ class StreamingMp3Decoder {
         channels: Int,
         cancelled: AtomicBoolean,
         errored: () -> Boolean,
-        deadlineMs: Long,
+        firstAudioDeadlineMs: Long,
         onPcm: (ByteArray) -> Unit,
     ) {
         val c = try {
@@ -147,17 +170,36 @@ class StreamingMp3Decoder {
         var inputEos = false
         var outputEos = false
         var pts = 0L
+        var receivedAudio = false
+        // Decoding is paced by playback (onPcm blocks while audio plays), so a
+        // long passage legitimately takes minutes. Only fail when neither input
+        // nor output has moved for a while, never on total duration.
+        var lastProgressMs = android.os.SystemClock.elapsedRealtime()
+        var failed = true
+        // An input buffer we own but have not queued yet. It must be held until
+        // audio arrives: dropping it leaks it, and after a few network waits the
+        // codec has no input buffers left and stalls for good.
+        var heldInput = -1
 
         try {
             while (!outputEos) {
                 if (cancelled.get() || errored()) break
-                if (android.os.SystemClock.elapsedRealtime() > deadlineMs) {
-                    throw EdgeTtsException("Synthesis timeout")
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                val framesWaiting = pendingFrame != null || splitter.hasFrames()
+                if (!receivedAudio && framesWaiting) receivedAudio = true
+                if (!receivedAudio && nowMs > firstAudioDeadlineMs) {
+                    throw EdgeTtsException("No audio received from server")
+                }
+                if (nowMs - lastProgressMs > PROGRESS_TIMEOUT_MS) {
+                    throw EdgeTtsException(
+                        if (framesWaiting) "MP3 decoder stalled" else "Audio stream stopped"
+                    )
                 }
 
                 // ---- feed input (whole frames only, packed per buffer) ----
                 if (!inputEos) {
-                    val inIdx = c.dequeueInputBuffer(TIMEOUT_US)
+                    if (heldInput < 0) heldInput = c.dequeueInputBuffer(TIMEOUT_US)
+                    val inIdx = heldInput
                     if (inIdx >= 0) {
                         // Only remove audio from the queue once the codec has
                         // accepted an input buffer. A temporary dequeue timeout
@@ -165,6 +207,7 @@ class StreamingMp3Decoder {
                         val frame = pendingFrame?.also { pendingFrame = null }
                             ?: splitter.poll()
                         if (frame != null) {
+                            receivedAudio = true
                             val ib = c.getInputBuffer(inIdx)!!
                             ib.clear()
                             ib.put(frame)
@@ -180,12 +223,19 @@ class StreamingMp3Decoder {
                                 ib.put(next); written += next.size
                             }
                             c.queueInputBuffer(inIdx, 0, written, pts, 0)
+                            heldInput = -1
+                            lastProgressMs = nowMs
                             pts += 24_000L
                         } else if (splitter.isDrained()) {
                             c.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            heldInput = -1
+                            lastProgressMs = nowMs
                             inputEos = true
+                        } else {
+                            // Awaiting more network data; keep holding the buffer.
+                            Thread.sleep(2)
                         }
-                    } else if (pendingFrame == null && !splitter.isDrained()) {
+                    } else if (!framesWaiting && !splitter.isDrained()) {
                         // Awaiting more network data.
                         Thread.sleep(2)
                     }
@@ -202,13 +252,22 @@ class StreamingMp3Decoder {
                         onPcm(pcm)
                     }
                     c.releaseOutputBuffer(outIdx, false)
+                    // Measured after onPcm returns: time blocked on playback is not a stall.
+                    lastProgressMs = android.os.SystemClock.elapsedRealtime()
                     if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputEos = true
+                } else if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    lastProgressMs = android.os.SystemClock.elapsedRealtime()
                 }
             }
+            failed = false
         } finally {
             pendingFrame = null
-            // Flush so the codec is ready to be reused for the next utterance.
-            runCatching { c.flush() }
+            when {
+                failed -> release()
+                outputEos -> resetAfterEos(c)
+                // Cancelled/errored mid-stream: no EOS was queued, so flush is safe.
+                else -> if (runCatching { c.flush() }.isFailure) release()
+            }
         }
     }
 
