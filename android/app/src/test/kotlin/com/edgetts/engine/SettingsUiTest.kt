@@ -162,6 +162,24 @@ class SettingsUiTest {
     }
 
     @Test
+    @Config(qualifiers = "h520dp")
+    fun dropdownOpensBelowItsFieldEvenLowOnAShortScreen() {
+        val activity = Robolectric.buildActivity(EngineSettingsActivity::class.java).setup().get()
+        val voice = activity.findViewById<MaterialAutoCompleteTextView>(R.id.voiceField)
+        waitUntil("voices") { voice.adapter != null }
+
+        voice.requestFocus()
+        waitUntil("dropdown") { voice.isPopupShowing }
+        val listPopup = android.widget.AutoCompleteTextView::class.java.getDeclaredField("mPopup")
+            .apply { isAccessible = true }.get(voice) as android.widget.ListPopupWindow
+        val window = android.widget.ListPopupWindow::class.java.getDeclaredField("mPopup")
+            .apply { isAccessible = true }.get(listPopup) as android.widget.PopupWindow
+        assertTrue("dropdown opened above the field", !window.isAboveAnchor)
+        assertTrue(voice.dropDownHeight > 0)
+        dropdownScreenshot(activity, voice, "dropdown_short_screen")
+    }
+
+    @Test
     fun engineMapsRequestsToPerLanguageChoice() {
         val catalog = parsedCatalog()
         assertEquals("en-US", VoicePrefs.localeFor(context, "eng", "USA", catalog))

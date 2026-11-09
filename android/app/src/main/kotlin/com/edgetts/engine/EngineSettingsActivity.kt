@@ -1,8 +1,12 @@
 package com.edgetts.engine
 
 import android.content.Intent
+import android.graphics.Rect
 import android.os.Bundle
 import android.view.View
+import android.widget.ScrollView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
@@ -26,6 +30,8 @@ import kotlin.math.roundToInt
  */
 class EngineSettingsActivity : AppCompatActivity() {
 
+    private lateinit var scroll: ScrollView
+    private lateinit var content: View
     private lateinit var languageField: MaterialAutoCompleteTextView
     private lateinit var voiceField: MaterialAutoCompleteTextView
     private lateinit var rateSlider: Slider
@@ -44,6 +50,9 @@ class EngineSettingsActivity : AppCompatActivity() {
     private var currentVoice: String? = null
     private var languageAdapter: SearchableAdapter? = null
     private var voiceAdapter: SearchableAdapter? = null
+    /** The dropdown field being edited, kept scrolled so its list opens below it. */
+    private var activeDropdown: MaterialAutoCompleteTextView? = null
+    private var contentBottomPadding = 0
 
     private val previewClient = EdgeTtsClient()
     private val previewCancel = AtomicBoolean(false)
@@ -55,6 +64,9 @@ class EngineSettingsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
 
+        scroll = findViewById(R.id.scroll)
+        content = findViewById(R.id.content)
+        contentBottomPadding = content.paddingBottom
         languageField = findViewById(R.id.languageField)
         voiceField = findViewById(R.id.voiceField)
         rateSlider = findViewById(R.id.rateSlider)
@@ -69,6 +81,7 @@ class EngineSettingsActivity : AppCompatActivity() {
         errorsText = findViewById(R.id.errorsText)
 
         sampleText.setText(getString(R.string.default_sample))
+        applyWindowInsets()
         setUpSliders()
 
         setUpDropdown(languageField, { languageAdapter }, ::selectedLanguageLabel) { showLanguage(it.value) }
@@ -172,15 +185,89 @@ class EngineSettingsActivity : AppCompatActivity() {
         }
         field.setOnFocusChangeListener { _, hasFocus ->
             if (hasFocus) {
+                activeDropdown = field
                 // Open the full, scrollable list straight away; typing then filters it.
                 field.post {
+                    if (!field.hasFocus()) return@post
                     adapter()?.showAll()
-                    if (field.hasFocus()) field.showDropDown()
+                    keepDropdownBelow(field) { if (field.hasFocus()) field.showDropDown() }
                 }
             } else {
+                if (activeDropdown === field) {
+                    activeDropdown = null
+                    setContentBottomPadding(contentBottomPadding)
+                    field.dropDownHeight = android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                }
                 field.setText(currentLabel().orEmpty(), false)
                 adapter()?.showAll()
             }
+        }
+    }
+
+    /**
+     * Pads the window for the system bars and the keyboard ourselves (edge-to-
+     * edge apps are not resized for the IME), so the scroll view is exactly
+     * the space above the keyboard. Each time that space changes, the open
+     * dropdown is re-anchored below its field.
+     */
+    private fun applyWindowInsets() {
+        val root = findViewById<View>(R.id.root)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+            WindowInsetsCompat.CONSUMED
+        }
+        scroll.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            val field = activeDropdown ?: return@addOnLayoutChangeListener
+            if (bottom - top == oldBottom - oldTop || !field.hasFocus()) return@addOnLayoutChangeListener
+            field.post {
+                keepDropdownBelow(field) { if (field.isPopupShowing) field.showDropDown() }
+            }
+        }
+    }
+
+    /**
+     * Android opens a dropdown above its field whenever there is more room
+     * above. Scroll the field to the top of the visible area and size the list
+     * to the space left below it, so it always opens underneath.
+     */
+    private fun keepDropdownBelow(field: MaterialAutoCompleteTextView, then: () -> Unit) {
+        val gap = (8 * resources.displayMetrics.density).toInt()
+        // Let the field reach the top even near the end of the page; scrolling
+        // can only use the extra room after the next layout pass.
+        val padding = contentBottomPadding + scroll.height
+        if (content.paddingBottom != padding) {
+            setContentBottomPadding(padding)
+            content.viewTreeObserver.addOnGlobalLayoutListener(
+                object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                    override fun onGlobalLayout() {
+                        content.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                        if (field.hasFocus()) keepDropdownBelow(field, then)
+                    }
+                }
+            )
+            return
+        }
+        val box = (field.parent?.parent as? View) ?: field
+        val boxRect = Rect().also { box.getDrawingRect(it) }
+        scroll.offsetDescendantRectToMyCoords(box, boxRect)
+        val fieldRect = Rect().also { field.getDrawingRect(it) }
+        scroll.offsetDescendantRectToMyCoords(field, fieldRect)
+
+        val targetScroll = (boxRect.top - gap).coerceAtLeast(0)
+        scroll.scrollTo(0, targetScroll)
+        val spaceBelow = scroll.height - (fieldRect.bottom - targetScroll) - gap
+        val minimum = (120 * resources.displayMetrics.density).toInt()
+        field.dropDownHeight = spaceBelow.coerceAtLeast(minimum)
+        then()
+    }
+
+    private fun setContentBottomPadding(bottom: Int) {
+        if (content.paddingBottom != bottom) {
+            content.setPadding(content.paddingLeft, content.paddingTop, content.paddingRight, bottom)
         }
     }
 
