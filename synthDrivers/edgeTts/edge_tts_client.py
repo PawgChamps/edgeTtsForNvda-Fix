@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import email.utils
 import json
 import os
 import struct
@@ -41,6 +42,11 @@ USER_AGENT = (
 
 _VOICE_CACHE_FILE = "voices_cache.json"
 _VOICE_CACHE_MAX_AGE = 86400
+
+_CONNECT_TIMEOUT = 10.0
+# Edge streams the first audio within ~1s; silence past these means a dead socket.
+_FIRST_AUDIO_TIMEOUT = 10.0
+_STREAM_STALL_TIMEOUT = 10.0
 
 from .mp3_decoder import decode_mp3_to_pcm, FfmpegPool, StreamingMp3Decoder
 
@@ -128,6 +134,12 @@ class EdgeTtsCancelled(Exception):
     pass
 
 
+class _StreamFailed(Exception):
+    def __init__(self, message: str, got_audio: bool) -> None:
+        super().__init__(message)
+        self.got_audio = got_audio
+
+
 def list_voices(force_refresh: bool = False) -> list[dict[str, Any]]:
     cache_path = _cache_dir() / _VOICE_CACHE_FILE
     if not force_refresh and cache_path.is_file():
@@ -189,7 +201,19 @@ class EdgeTtsStreamer:
         self._ws_module = websocket
         return websocket
 
-    def _connect(self) -> Any:
+    def _adjust_clock_skew(self, resp_headers: dict | None) -> bool:
+        """Sync the token clock to the server's Date header (as edge-tts does)."""
+        date = (resp_headers or {}).get("date")
+        if not date:
+            return False
+        try:
+            server_time = email.utils.parsedate_to_datetime(date).timestamp()
+        except (TypeError, ValueError):
+            return False
+        self._clock_skew = server_time - time.time()
+        return True
+
+    def _connect(self, clock_retry: bool = True) -> Any:
         websocket = self._get_ws_module()
         connection_id = _random_hex(32)
         sec_gec = _generate_sec_ms_gec(self._clock_skew)
@@ -202,12 +226,22 @@ class EdgeTtsStreamer:
             "Accept-Encoding": "gzip, deflate, br",
             "Accept-Language": "en-US,en;q=0.9",
         }
-        ws = websocket.create_connection(
-            ws_url,
-            timeout=30,
-            header=[f"{k}: {v}" for k, v in headers.items()],
-            suppress_origin=True,
-        )
+        try:
+            ws = websocket.create_connection(
+                ws_url,
+                timeout=_CONNECT_TIMEOUT,
+                header=[f"{k}: {v}" for k, v in headers.items()],
+                suppress_origin=True,
+            )
+        except websocket.WebSocketBadStatusException as exc:
+            # The token is time-based, so a skewed PC clock yields 403.
+            if (
+                clock_retry
+                and exc.status_code == 403
+                and self._adjust_clock_skew(exc.resp_headers)
+            ):
+                return self._connect(clock_retry=False)
+            raise
         config_msg = (
             f"X-Timestamp:{_js_timestamp()}\r\n"
             f"Content-Type:application/json; charset=utf-8\r\n"
@@ -219,7 +253,9 @@ class EdgeTtsStreamer:
         ws.send(config_msg)
         return ws
 
-    def _get_connection(self) -> Any:
+    def _get_connection(self, fresh: bool = False) -> Any:
+        if fresh:
+            self._close_connection()
         with self._ws_lock:
             if self._ws is not None:
                 try:
@@ -267,62 +303,31 @@ class EdgeTtsStreamer:
         pitch_str = f"{pitch:+d}Hz"
         volume_str = f"{volume:+d}%"
 
-        request_id = _random_hex(32)
-
-        try:
-            ws = self._get_connection()
-        except Exception:
-            self._close_connection()
-            ws = self._get_connection()
-
+        ssml = _build_ssml(text, full_voice, rate_str, pitch_str, volume_str)
         decoder = StreamingMp3Decoder(self._pool, on_audio=on_audio) if on_audio else None
+        mp3_parts: list[bytes] = []
 
         try:
-            if cancel_event and cancel_event.is_set():
-                raise EdgeTtsCancelled()
-
-            ssml = _build_ssml(text, full_voice, rate_str, pitch_str, volume_str)
-            ssml_msg = (
-                f"X-RequestId:{request_id}\r\n"
-                f"Content-Type:application/ssml+xml\r\n"
-                f"X-Timestamp:{_js_timestamp()}Z\r\n"
-                f"Path:ssml\r\n\r\n"
-                f"{ssml}"
-            )
-            ws.send(ssml_msg)
-
-            mp3_parts: list[bytes] = []
-            ws.settimeout(0.05)
-
-            while True:
+            # A reused connection may be dead (server idle close, network
+            # change) while still passing ping(); retry once on a fresh socket,
+            # but only if no audio was played yet so nothing is spoken twice.
+            for attempt in range(2):
                 if cancel_event and cancel_event.is_set():
                     raise EdgeTtsCancelled()
-
                 try:
-                    opcode, data = ws.recv_data()
-                except websocket.WebSocketTimeoutException:
+                    ws = self._get_connection(fresh=attempt > 0)
+                except (websocket.WebSocketException, OSError) as exc:
+                    if attempt == 1:
+                        raise EdgeTtsError(f"Could not connect to Edge TTS: {exc}") from exc
                     continue
-                except websocket.WebSocketConnectionClosedException:
-                    self._close_connection()
+                try:
+                    self._stream(ws, websocket, ssml, decoder, mp3_parts, cancel_event)
                     break
-
-                if opcode == websocket.ABNF.OPCODE_BINARY:
-                    if len(data) < 2:
-                        continue
-                    header_len = struct.unpack(">H", data[:2])[0]
-                    audio_data = data[2 + header_len:]
-                    header_bytes = data[2:2 + header_len]
-                    header_text = header_bytes.decode("utf-8", errors="replace")
-                    if "Path:audio" in header_text and audio_data:
-                        if decoder:
-                            decoder.feed(audio_data)
-                        else:
-                            mp3_parts.append(audio_data)
-
-                elif opcode == websocket.ABNF.OPCODE_TEXT:
-                    text_data = data if isinstance(data, str) else data.decode("utf-8", errors="replace")
-                    if "Path:turn.end" in text_data:
-                        break
+                except _StreamFailed as exc:
+                    self._close_connection()
+                    if exc.got_audio or attempt == 1:
+                        raise EdgeTtsError(str(exc)) from exc
+                    log.debug(f"Edge TTS: {exc}; retrying on a new connection")
 
             if cancel_event and cancel_event.is_set():
                 raise EdgeTtsCancelled()
@@ -339,18 +344,68 @@ class EdgeTtsStreamer:
                     return b""
                 return _trim_leading_silence(pcm)
 
-        except EdgeTtsCancelled:
-            self._close_connection()
-            if decoder:
-                decoder.close()
-            raise
-        except (websocket.WebSocketConnectionClosedException, OSError, ConnectionError):
-            self._close_connection()
-            if decoder:
-                decoder.close()
-            raise EdgeTtsError("WebSocket connection lost")
         except Exception:
             self._close_connection()
             if decoder:
                 decoder.close()
             raise
+
+    def _stream(
+        self,
+        ws: Any,
+        websocket: Any,
+        ssml: str,
+        decoder: StreamingMp3Decoder | None,
+        mp3_parts: list[bytes],
+        cancel_event: threading.Event | None,
+    ) -> None:
+        """Sends one SSML request and pumps audio until turn.end."""
+        got_audio = False
+        try:
+            ws.send(
+                f"X-RequestId:{_random_hex(32)}\r\n"
+                f"Content-Type:application/ssml+xml\r\n"
+                f"X-Timestamp:{_js_timestamp()}Z\r\n"
+                f"Path:ssml\r\n\r\n"
+                f"{ssml}"
+            )
+            ws.settimeout(0.05)
+            started = last_data = time.monotonic()
+
+            while True:
+                if cancel_event and cancel_event.is_set():
+                    raise EdgeTtsCancelled()
+                now = time.monotonic()
+                if not got_audio and now - started > _FIRST_AUDIO_TIMEOUT:
+                    raise _StreamFailed("No audio received from server", got_audio)
+                if got_audio and now - last_data > _STREAM_STALL_TIMEOUT:
+                    raise _StreamFailed("Audio stream stalled", got_audio)
+
+                try:
+                    opcode, data = ws.recv_data()
+                except websocket.WebSocketTimeoutException:
+                    continue
+                last_data = time.monotonic()
+
+                if opcode == websocket.ABNF.OPCODE_BINARY:
+                    if len(data) < 2:
+                        continue
+                    header_len = struct.unpack(">H", data[:2])[0]
+                    audio_data = data[2 + header_len:]
+                    header_bytes = data[2:2 + header_len]
+                    header_text = header_bytes.decode("utf-8", errors="replace")
+                    if "Path:audio" in header_text and audio_data:
+                        got_audio = True
+                        if decoder:
+                            decoder.feed(audio_data)
+                        else:
+                            mp3_parts.append(audio_data)
+
+                elif opcode == websocket.ABNF.OPCODE_TEXT:
+                    text_data = data if isinstance(data, str) else data.decode("utf-8", errors="replace")
+                    if "Path:turn.end" in text_data:
+                        return
+        except websocket.WebSocketConnectionClosedException as exc:
+            raise _StreamFailed("Connection closed by server", got_audio) from exc
+        except (websocket.WebSocketException, OSError) as exc:
+            raise _StreamFailed(f"WebSocket connection lost: {exc}", got_audio) from exc
