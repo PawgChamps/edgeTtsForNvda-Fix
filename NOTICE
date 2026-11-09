@@ -1,0 +1,10 @@
+This project includes code ported from:
+
+  edge-tts
+  Copyright (c) rany2
+  Licensed under the GNU Lesser General Public License v3.0 (LGPL-3.0)
+  https://github.com/rany2/edge-tts
+
+Specifically, the v2 Sec-MS-GEC token generation algorithm in
+synthDrivers/edgeTts/drm.py and android/.../SecMsGec.kt is derived
+from src/edge_tts/drm.py in edge-tts version 7.3.1 (PR #492).

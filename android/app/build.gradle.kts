@@ -19,8 +19,8 @@ android {
         applicationId = "com.edgetts.engine"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         // Phone/tablet ABIs only. NOTE: this app is pure Kotlin/JVM (no native
         // .so libs), so the filter has no effect on the current output — a
@@ -72,4 +72,5 @@ dependencies {
     // remains on the Kotlin 1.9 toolchain supported by AGP 8.5.
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    testImplementation("junit:junit:4.13.2")
 }

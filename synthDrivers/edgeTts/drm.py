@@ -352,8 +352,13 @@ def _token_hash(data: bytes) -> tuple[str, str]:
     return cs64, digest.hex().upper()
 
 
-def generate_sec_ms_gec_v2(clock_skew: float = 0) -> str:
-    ticks = time.time() + clock_skew
+def generate_sec_ms_gec_v2(
+    clock_skew: float = 0, *, unix_timestamp: float | None = None
+) -> str:
+    if unix_timestamp is not None:
+        ticks = float(unix_timestamp)
+    else:
+        ticks = time.time() + clock_skew
     ticks += WIN_EPOCH
     ticks -= ticks % 300
     ticks *= S_TO_NS / 100
