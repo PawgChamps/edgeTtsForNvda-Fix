@@ -185,10 +185,12 @@ class EdgeTtsService : TextToSpeechService() {
             callback.done()
         } catch (e: EdgeTtsException) {
             Log.e(TAG, "Synthesis failed", e)
+            EngineErrorLog.record(this, "${e.message} [${text.length} chars]")
             callback.error(TextToSpeech.ERROR_NETWORK)
             callback.done()
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected synthesis error", e)
+            EngineErrorLog.record(this, "Unexpected: $e [${text.length} chars]")
             callback.error(TextToSpeech.ERROR_SYNTHESIS)
             callback.done()
         }

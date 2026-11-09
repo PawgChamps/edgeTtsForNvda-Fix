@@ -53,6 +53,7 @@ class EdgeTtsClient {
 
         /** Edge streams the first audio within ~1s; silence past this means a dead socket. */
         private const val FIRST_AUDIO_TIMEOUT_MS = 10_000L
+        private const val MAX_ATTEMPTS = 3
         /** How often the maintainer checks/refills the pool. */
         private const val MAINTAIN_INTERVAL_MS = 8_000L
         /** Recycle a connection older than this so the pool stays young/live. */
@@ -92,6 +93,9 @@ class EdgeTtsClient {
             finished = true; splitter.finish(); done.notifyAll()
         }
         fun signalError(t: Throwable) = synchronized(done) {
+            // After turn.end all audio is buffered locally, while playback may
+            // still run for minutes; a later connection drop is harmless.
+            if (finished) return@synchronized
             error = t; splitter.finish(); done.notifyAll()
         }
     }
@@ -116,6 +120,8 @@ class EdgeTtsClient {
     @Volatile private var shutdownFlag = false
     /** Last time speak()/prewarm() was called; drives the idle-keepalive window. */
     @Volatile private var lastActivityAt = 0L
+    /** A long paragraph can play for minutes; never go idle in the middle of one. */
+    @Volatile private var speaking = false
 
     /** Serialises speak() so the shared decoder is never used concurrently. */
     private val speakLock = Any()
@@ -252,7 +258,7 @@ class EdgeTtsClient {
 
     /** True while within the idle-keepalive window after the last use. */
     private fun isActive(): Boolean =
-        lastActivityAt != 0L && now() - lastActivityAt < IDLE_KEEPALIVE_MS
+        speaking || (lastActivityAt != 0L && now() - lastActivityAt < IDLE_KEEPALIVE_MS)
 
     private fun maintainOnce() {
         // Gone idle: drop the whole pool and stop holding connections open.
@@ -334,8 +340,19 @@ class EdgeTtsClient {
         }
     }
 
+    /**
+     * Drops idle pooled connections only. A connection that is mid-utterance is
+     * left alone: if the old network really went away it fails and is retried,
+     * and if the switch was a brief Wi-Fi/mobile handover it keeps working.
+     */
     private fun onNetworkChanged() {
-        close()
+        val idle = synchronized(poolLock) {
+            val list = listOfNotNull(active, spare).filter { it.current == null }
+            if (active in list) active = null
+            if (spare in list) spare = null
+            list
+        }
+        idle.forEach { it.dead = true; backgroundClose(it.ws) }
         wakeMaintainer()
     }
 
@@ -362,7 +379,9 @@ class EdgeTtsClient {
     /**
      * Synthesises [text] with [voice], streaming PCM to [sink] as it decodes.
      * Blocks until the utterance completes or [cancelled] is set. Uses a warm
-     * pooled connection; retries once on a dead connection.
+     * pooled connection. On failure it re-requests the utterance on a fresh
+     * connection and skips the audio already played, so a dropped connection
+     * mid-paragraph costs a short pause instead of the rest of the paragraph.
      */
     fun speak(
         text: String,
@@ -375,10 +394,21 @@ class EdgeTtsClient {
     ) = synchronized(speakLock) {
         if (text.isBlank()) return
         lastActivityAt = now()
+        speaking = true
         wakeMaintainer()
-        val ssmlMsg = buildSsmlMessage(text, voice, rate, pitch, volume)
+        try {
+            speakWithRetries(buildSsmlMessage(text, voice, rate, pitch, volume), cancelled, sink)
+        } finally {
+            speaking = false
+            // Measure the keepalive window from the END of use so rapid
+            // navigation keeps the pool warm.
+            lastActivityAt = now()
+        }
+    }
 
+    private fun speakWithRetries(ssmlMsg: String, cancelled: AtomicBoolean, sink: AudioSink) {
         var attempt = 0
+        var played = 0L // PCM bytes handed to the sink, across attempts
         while (true) {
             if (cancelled.get()) return
             val u = Utterance()
@@ -387,7 +417,7 @@ class EdgeTtsClient {
             conn.ws.send(ssmlMsg)
 
             val start = now()
-            var emitted = false
+            var decoded = 0L // PCM bytes decoded in this attempt
             val decodeError: Throwable? = try {
                 decoder.decode(
                     splitter = u.splitter,
@@ -397,7 +427,14 @@ class EdgeTtsClient {
                     errored = { u.error != null },
                     firstAudioDeadlineMs = start + FIRST_AUDIO_TIMEOUT_MS,
                 ) { pcm ->
-                    if (!cancelled.get()) { emitted = true; sink.onAudio(pcm) }
+                    // A resumed attempt re-synthesises from the start; drop
+                    // what was already spoken (Edge output is deterministic).
+                    val skip = (played - decoded).coerceIn(0L, pcm.size.toLong()).toInt()
+                    decoded += pcm.size
+                    if (!cancelled.get() && skip < pcm.size) {
+                        played += pcm.size - skip
+                        sink.onAudio(if (skip == 0) pcm else pcm.copyOfRange(skip, pcm.size))
+                    }
                 }
                 null
             } catch (e: Throwable) {
@@ -406,10 +443,6 @@ class EdgeTtsClient {
                 conn.current = null
             }
 
-            // Measure the keepalive window from the END of use so rapid
-            // navigation keeps the pool warm.
-            lastActivityAt = now()
-
             if (cancelled.get()) {
                 // Retire so no stale audio leaks; the warm spare becomes active
                 // for the next (rapid-navigation) utterance — no reconnect stall.
@@ -417,23 +450,25 @@ class EdgeTtsClient {
                 return
             }
 
-            val failed = u.error != null || decodeError != null || !emitted
-            if (failed) {
-                retire(conn)
-                if (attempt == 0 && !emitted) {
-                    // The spare may be just as stale (e.g. after a network
-                    // change), so drop the pool and retry on a fresh socket.
-                    close()
-                    attempt++
-                    continue
-                }
-                val cause = u.error ?: decodeError
-                val stage = "connected=${if (conn.opened) "yes" else "no"}, audio bytes=${u.audioBytes}"
-                throw EdgeTtsException("Synthesis failed: ${cause?.message ?: "no audio"} ($stage)", cause)
+            // turn.end with no audio (e.g. text that is only punctuation) is a
+            // legitimate empty result, not a failure.
+            val failed = u.error != null || decodeError != null || (decoded == 0L && !u.finished)
+            if (!failed) {
+                conn.lastUsedAt = now()
+                return
             }
 
-            conn.lastUsedAt = now()
-            return
+            retire(conn)
+            if (attempt < MAX_ATTEMPTS - 1) {
+                // The spare may be just as stale (e.g. after a network
+                // change), so drop the pool and retry on a fresh socket.
+                close()
+                attempt++
+                continue
+            }
+            val cause = u.error ?: decodeError
+            val stage = "connected=${if (conn.opened) "yes" else "no"}, audio bytes=${u.audioBytes}"
+            throw EdgeTtsException("Synthesis failed: ${cause?.message ?: "no audio"} ($stage)", cause)
         }
     }
 

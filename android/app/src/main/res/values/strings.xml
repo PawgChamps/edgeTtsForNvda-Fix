@@ -26,6 +26,7 @@
     <string name="testing">Speaking…</string>
     <string name="test_done">Done</string>
     <string name="test_error">Playback failed: %1$s</string>
+    <string name="recent_errors">Recent engine errors (newest first):\n%1$s</string>
 
     <!-- Default-engine prompt -->
     <string name="set_default_title">Set Edge TTS as default?</string>

@@ -116,11 +116,14 @@ class EngineSettingsActivity : Activity() {
                     val savedLocale = allVoices.firstOrNull { it.shortName == savedVoice }?.locale
                     val langIdx = languages.indexOf(savedLocale).takeIf { it >= 0 } ?: 0
                     languageSpinner.setSelection(langIdx)
-                    status.text = resources.getQuantityString(
+                    val loaded = resources.getQuantityString(
                         R.plurals.voices_loaded,
                         list.size,
                         list.size,
                     )
+                    val errors = EngineErrorLog.read(this)
+                    status.text = if (errors.isEmpty()) loaded else
+                        loaded + "\n\n" + getString(R.string.recent_errors, errors.joinToString("\n"))
                 }.onFailure {
                     status.text = getString(R.string.voices_error, it.message ?: "unknown")
                 }
